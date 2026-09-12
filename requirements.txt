@@ -1,13 +1,27 @@
-fastapi>=0.110.0
-uvicorn>=0.28.0
-libcst>=1.1.0
-tree-sitter>=0.22.0
-tree-sitter-go>=0.21.0
-tree-sitter-python>=0.21.0
-langchain>=0.1.0
-langchain-openai>=0.0.5
-chromadb>=0.4.22
-pydantic>=2.6.0
-python-dotenv>=1.0.1
-langchain-google-genai
-python-multipart
+# Web Framework & Server
+fastapi>=0.141.1
+uvicorn[standard]>=0.52.4
+python-multipart>=0.0.32
+
+# Code Parsing & AST Tools
+libcst>=1.9.0
+tree-sitter>=0.26.0
+tree-sitter-go>=0.25.0
+tree-sitter-python>=0.25.0
+
+# Generative AI & LLM Orchestration
+langchain>=1.4.0
+langchain-core>=1.6.2
+langchain-google-genai>=4.4.0
+langchain-openai>=1.6.2
+
+# Vector Store & RAG
+chromadb>=1.5.9
+
+# AWS & Cloud Secrets
+boto3>=1.43.93
+botocore>=1.43.93
+
+# Configuration & Validation
+pydantic>=2.13.5
+python-dotenv>=1.2.3
