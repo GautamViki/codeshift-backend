@@ -1,3 +1,4 @@
+from datetime import datetime
 import libcst as cst
 import re
 from langchain_core.prompts import ChatPromptTemplate
@@ -35,7 +36,10 @@ class CodeTranspilerService:
             api_key=config.GOOGLE_API_KEY,
         )
 
-    def python_to_go(self, py_code: str, base_name: str = "output") -> dict:
+    def python_to_go(self, py_code: str, base_name: str | None = None) -> dict:
+        if not base_name:
+            base_name = datetime.now().strftime("transpiled_%Y%b%d_%Hh_%Mm_%Ss")
+
         # Step 1: Validate input Python syntax using CST
         try:
             cst.parse_module(py_code)
