@@ -1,8 +1,8 @@
-import uuid
 from pathlib import Path
 
-GENERATED_DIR = Path("generated_code")
-GENERATED_DIR.mkdir(exist_ok=True)
+BASE_DIR = Path(__file__).resolve().parent.parent  # adjust to your actual project root
+GENERATED_DIR = BASE_DIR / "generated_code"
+GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def save_generated_go(code: str, base_name: str) -> Path:

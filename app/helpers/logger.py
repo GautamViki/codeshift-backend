@@ -10,7 +10,7 @@ LOG_FILE = LOG_DIR / "app.log"
 def setup_logger(name: str = "transpiler") -> logging.Logger:
     logger = logging.getLogger(name)
 
-    if logger.handlers:  # avoid duplicate handlers on reload
+    if logger.handlers:  # avoid duplicate helpers on reload
         return logger
 
     logger.setLevel(logging.DEBUG)
