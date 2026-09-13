@@ -102,3 +102,17 @@ class FileWriteError(TranspilerError):
     app_code = 4001
     default_message = "Failed to save the generated code to disk."
     error_type = "FILE_WRITE_ERROR"
+
+
+class CodeValidationError(TranspilerError):
+    status_code = 422
+    app_code = 3001
+    default_message = "The generated code failed validation."
+    error_type = "CODE_VALIDATION_FAILED"
+
+
+class ValidationToolUnavailableError(TranspilerError):
+    status_code = 500
+    app_code = 3002
+    default_message = "Validation tooling is not available on this server."
+    error_type = "VALIDATION_TOOL_UNAVAILABLE"

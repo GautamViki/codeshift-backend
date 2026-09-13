@@ -1,16 +1,11 @@
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent  # adjust to your actual project root
+BASE_DIR = Path(__file__).resolve().parent.parent
 GENERATED_DIR = BASE_DIR / "generated_code"
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def save_generated_go(code: str, base_name: str) -> Path:
-    """
-    Writes Go source to disk using the same base name as the input file.
-    Re-running with the same input overwrites the previous output
-    instead of creating a new file each time.
-    """
-    filepath = GENERATED_DIR / f"{base_name}.go"
+def save_generated_code(code: str, base_name: str, extension: str) -> Path:
+    filepath = GENERATED_DIR / f"{base_name}.{extension}"
     filepath.write_text(code, encoding="utf-8")
     return filepath

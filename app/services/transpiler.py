@@ -1,90 +1,74 @@
 from datetime import datetime
-import libcst as cst
 import re
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_google_genai.chat_models import GoogleRateLimitError, GoogleAuthenticationError, \
-    GooglePermissionDeniedError, ChatGoogleGenerativeAIError
+from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 
 from app.helpers.exceptions import (
-    InvalidPythonSyntaxError,
-    RateLimitExceededError,
-    InvalidApiKeyError,
-    PermissionDeniedError,
-    LLMProviderError,
-    GoValidationError,
-    EmptyLLMResponseError, FileWriteError, GoToolingUnavailableError
+    CodeValidationError, EmptyLLMResponseError,
+    FileWriteError, ValidationToolUnavailableError
 )
-
-_CODE_TO_EXCEPTION = {
-    429: RateLimitExceededError,
-    401: InvalidApiKeyError,
-    403: PermissionDeniedError,
-}
-
 from app.config import config
-from app.validators.go_validator import validate_go_code
-from app.services.file_writer import save_generated_go
+from app.helpers.utils import handle_llm_error
+from app.services.file_writer import save_generated_code
+from app.helpers.utils import get_extension, get_start_marker, get_validator
+from app.helpers.logger import logger
+from app.helpers.constants import GEMINI_MODEL_NAME, GEMINI_TEMPERATURE
 
-def extract_go_code(raw_text: str) -> str:
-    """Cleans backslashes and extracts raw Go code starting from `package`."""
+
+def extract_code(raw_text: str, target_language: str) -> str:
+    """Cleans backslashes and extracts code starting from the language's marker, if known."""
     text = str(raw_text).strip()
-    # Safely replace literal escaped backslash sequences without using unicode_escape
-    # Fixes single-line code blocks where \\n was returned instead of true newlines
+
     if "\\n" in text and "\n" not in text:
         text = text.replace("\\n", "\n").replace("\\t", "\t")
 
-    # Locate the start of the Go package declaration
-    package_match = re.search(r'\bpackage\s+\w+', text)
-    if package_match:
-        text = text[package_match.start():]
+    marker = get_start_marker(target_language)
+    if marker:
+        match = re.search(marker, text, flags=re.MULTILINE)
+        if match:
+            text = text[match.start():]
 
-    # Strip trailing markdown code block closures (e.g., ```)
     text = re.sub(r'```.*$', '', text, flags=re.DOTALL).strip()
+    text = re.sub(r'^```\w*\n', '', text)
     return text
 
 
 class CodeTranspilerService:
     def __init__(self):
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-3.6-flash",
-            temperature=0.0,
+            model=GEMINI_MODEL_NAME,
+            temperature=GEMINI_TEMPERATURE,
             api_key=config.GOOGLE_API_KEY,
         )
 
-    def python_to_go(self, py_code: str, base_name: str | None = None) -> dict:
+    def transpile(
+        self,
+        source_code: str,
+        source_language: str,
+        target_language: str,
+        base_name: str | None = None,
+    ) -> dict:
+        response = {}
         if not base_name:
             base_name = datetime.now().strftime("transpiled_%Y%b%d_%Hh_%Mm_%Ss")
 
-        # Step 1: Validate input Python syntax using CST
-        try:
-            cst.parse_module(py_code)
-        except Exception as e:
-            raise InvalidPythonSyntaxError(f"Invalid Python input syntax: {str(e)}")
-        # Step 2: Prompt LLM with strict formatting rules
         prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are an expert compiler engineer. Convert Python code to idiomatic Go code.\n"
-                       "IMPORTANT RULES:\n"
-                       "1. Output MUST start immediately with 'package main'.\n"
-                       "2. Do NOT wrap the output in markdown code blocks or backticks.\n"
-                       "3. Do NOT add introductory or concluding text.\n"
-                       "4. Use standard Go double-quoted strings or raw backticks. Do NOT use single quotes for multi-character strings.\n"
-                       "5. Include explicit error handling (if err != nil) and necessary imports."),
+            ("system",
+             f"You are an expert compiler engineer. Convert {source_language} code to idiomatic {target_language} code.\n"
+             "IMPORTANT RULES:\n"
+             f"1. Output ONLY {target_language} code — no markdown code blocks, no backticks.\n"
+             "2. Do NOT add introductory or concluding text.\n"
+             "3. Include explicit error handling and necessary imports, following that language's conventions."),
             ("user", "{code}")
         ])
 
         chain = prompt | self.llm
 
         try:
-            response = chain.invoke({"code": py_code})
-        except GoogleRateLimitError as e:
-            raise RateLimitExceededError(self._extract_clean_message(e, str(e)))
-        except GoogleAuthenticationError as e:
-            raise InvalidApiKeyError(self._extract_clean_message(e, str(e)))
-        except GooglePermissionDeniedError as e:
-            raise PermissionDeniedError(self._extract_clean_message(e, str(e)))
+            response = chain.invoke({"code": source_code})
         except ChatGoogleGenerativeAIError as e:
-            raise LLMProviderError(self._extract_clean_message(e, str(e)))
+            handle_llm_error(e, source_language, target_language)
 
         content = self.extract_text_from_response(response)
         raw_output = content.strip() if content else ""
@@ -92,29 +76,37 @@ class CodeTranspilerService:
         if not raw_output:
             raise EmptyLLMResponseError()
 
-        generated_go = extract_go_code(raw_output)
-        if not generated_go:
-            raise EmptyLLMResponseError("Model response did not contain any Go code.")
+        generated_code = extract_code(raw_output, target_language)
+        if not generated_code:
+            raise EmptyLLMResponseError(f"Model response did not contain any {target_language} code.")
+
+        validator = get_validator(target_language)
+        is_valid, message = True, f"No validator configured for {target_language}; skipped."
+        if validator:
+            try:
+                is_valid, message = validator(generated_code)
+            except FileNotFoundError as e:
+                logger.error(f"Validation tooling missing for {target_language}: {e}")
+                raise ValidationToolUnavailableError() from e
+            except Exception as e:
+                logger.error(f"Validator for {target_language} raised unexpectedly: {e}", exc_info=True)
+                raise ValidationToolUnavailableError(
+                    f"{target_language} validation crashed unexpectedly: {str(e)}"
+                ) from e
+
+            if not is_valid:
+                raise CodeValidationError(message)
 
         try:
-            is_valid, message = validate_go_code(generated_go)
-        except FileNotFoundError:
-            raise GoToolingUnavailableError()
-        except Exception as e:
-            raise GoToolingUnavailableError(f"Go validation crashed unexpectedly: {str(e)}")
-
-        if not is_valid:
-            raise GoValidationError(message)
-
-
-        try:
-            saved_path = str(save_generated_go(generated_go, base_name))
+            extension = get_extension(target_language)
+            saved_path = str(save_generated_code(generated_code, base_name, extension))
         except OSError as e:
-            raise FileWriteError(f"Could not write generated file: {str(e)}")
+            logger.error(f"Failed to write generated file for base_name={base_name}: {e}")
+            raise FileWriteError(f"Could not write generated file: {str(e)}") from e
 
         return {
             "success": is_valid,
-            "transpiled_code": generated_go,
+            "transpiled_code": generated_code,
             "validation_message": message,
             "saved_path": saved_path,
         }
@@ -134,9 +126,7 @@ class CodeTranspilerService:
         return str(content)
 
     def _extract_clean_message(self, exc: Exception, fallback: str) -> str:
-        """Pulls the clean 'message' field out of the original Google API error,
-        stripping off the nested quota/violation metadata."""
-        original = exc.__cause__  # the underlying google.genai.errors.ClientError
+        original = exc.__cause__
         if original is not None and hasattr(original, "details"):
             try:
                 details = original.details
