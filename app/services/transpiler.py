@@ -25,7 +25,6 @@ _CODE_TO_EXCEPTION = {
 from app.config import config
 from app.validators.go_validator import validate_go_code
 from app.services.file_writer import save_generated_go
-from app.helpers.logger import logger
 
 def extract_go_code(raw_text: str) -> str:
     """Cleans backslashes and extracts raw Go code starting from `package`."""

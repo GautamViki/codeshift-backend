@@ -1,5 +1,6 @@
 from starlette.responses import Response
 from fastapi import Request
+from http import HTTPStatus
 
 from app.helpers.logger import logger
 
@@ -8,7 +9,7 @@ async def log_requests(request: Request, call_next):
     logger.info(f"Incoming request: {request.method} {request.url.path}")
     response = await call_next(request)
 
-    if response.status_code >= 400:
+    if response.status_code >= HTTPStatus.BAD_REQUEST:
         body_bytes = b""
         async for chunk in response.body_iterator:
             body_bytes += chunk

@@ -29,7 +29,6 @@ def setup_logger(name: str = "transpiler") -> logging.Logger:
 
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
 
     return logger
 

@@ -10,7 +10,6 @@ from app.routers import transpile
 
 configure_warnings()
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await on_startup()
