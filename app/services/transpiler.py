@@ -3,17 +3,15 @@ import libcst as cst
 import re
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
-from google.genai.errors import ClientError, ServerError
 from langchain_google_genai.chat_models import GoogleRateLimitError, GoogleAuthenticationError, \
-    GooglePermissionDeniedError, GoogleInvalidRequestError, GoogleModelNotFoundError, ChatGoogleGenerativeAIError
+    GooglePermissionDeniedError, ChatGoogleGenerativeAIError
 
-from app.exceptions import (
+from app.helpers.exceptions import (
     InvalidPythonSyntaxError,
     RateLimitExceededError,
     InvalidApiKeyError,
     PermissionDeniedError,
     LLMProviderError,
-    ProviderUnavailableError,
     GoValidationError,
     EmptyLLMResponseError, FileWriteError, GoToolingUnavailableError
 )
@@ -27,12 +25,11 @@ _CODE_TO_EXCEPTION = {
 from app.config import config
 from app.validators.go_validator import validate_go_code
 from app.services.file_writer import save_generated_go
-from app.logger import logger
+from app.helpers.logger import logger
 
 def extract_go_code(raw_text: str) -> str:
     """Cleans backslashes and extracts raw Go code starting from `package`."""
     text = str(raw_text).strip()
-    logger.info(f"Extracting Go code from {text}")
     # Safely replace literal escaped backslash sequences without using unicode_escape
     # Fixes single-line code blocks where \\n was returned instead of true newlines
     if "\\n" in text and "\n" not in text:
