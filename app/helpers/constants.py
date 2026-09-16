@@ -8,7 +8,8 @@ from app.helpers.logger import logger
 
 # Gemini model configuration
 GEMINI_MODEL_NAME = "gemini-3.6-flash"
-GEMINI_TEMPERATURE = 0.0
+GEMINI_TEMPERATURE = 0.1
+THINKING_BUDGET = 0
 
 # Maps a Google/LangChain exception type to: (our exception class, log function, log prefix).
 # Order matters — more specific exception types must come before their parent classes,

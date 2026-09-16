@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  transpiler-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: code_transpiler_ai
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app        # <-- FIXED: Mounts to /app/app instead of /app
+      - ./logs:/app/logs
+    env_file:
+      - .env.development
+    restart: unless-stopped

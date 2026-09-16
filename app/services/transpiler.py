@@ -9,11 +9,10 @@ from app.helpers.exceptions import (
     FileWriteError, ValidationToolUnavailableError
 )
 from app.config import config
-from app.helpers.utils import handle_llm_error
 from app.services.file_writer import save_generated_code
-from app.helpers.utils import get_extension, get_start_marker, get_validator
+from app.helpers.utils import get_extension, get_start_marker, get_validator, handle_llm_error
 from app.helpers.logger import logger
-from app.helpers.constants import GEMINI_MODEL_NAME, GEMINI_TEMPERATURE
+from app.helpers.constants import GEMINI_MODEL_NAME, GEMINI_TEMPERATURE, THINKING_BUDGET
 
 
 def extract_code(raw_text: str, target_language: str) -> str:
@@ -40,6 +39,7 @@ class CodeTranspilerService:
             model=GEMINI_MODEL_NAME,
             temperature=GEMINI_TEMPERATURE,
             api_key=config.GOOGLE_API_KEY,
+            thinking_budget=THINKING_BUDGET
         )
 
     def transpile(
