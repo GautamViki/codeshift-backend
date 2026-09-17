@@ -1,6 +1,7 @@
 import logging
 import os
 from pathlib import Path
+from logging.handlers import WatchedFileHandler
 
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
@@ -22,7 +23,7 @@ def setup_logger(name: str = "transpiler") -> logging.Logger:
 
     # Only write to file (and echo to console) in local/dev
     if os.getenv("ENVIRONMENT", "development") == "development":
-        file_handler = logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8")
+        file_handler = WatchedFileHandler(LOG_FILE, mode="a", encoding="utf-8")
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
