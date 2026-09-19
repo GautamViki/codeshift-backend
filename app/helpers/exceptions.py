@@ -35,6 +35,13 @@ class UnsupportedLanguageError(TranspilerError):
     error_type = "UNSUPPORTED_LANGUAGE"
 
 
+class InvalidFileEncodingError(TranspilerError):
+    status_code = 400
+    app_code = 1003
+    default_message = "Uploaded content is not valid UTF-8 text."
+    error_type = "INVALID_FILE_ENCODING"
+
+
 # ---- LLM / provider errors ----
 
 class LLMProviderError(TranspilerError):

@@ -2,7 +2,6 @@ import asyncio
 from datetime import datetime
 import inspect
 import re
-from typing import AsyncGenerator
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
@@ -19,6 +18,8 @@ from app.helpers.utils import (
 from app.helpers.cache import transpile_cache
 from app.helpers.logger import logger
 from app.helpers.constants import GEMINI_MODEL_NAME, GEMINI_TEMPERATURE, THINKING_BUDGET
+
+MAX_REPAIR_ATTEMPTS = 2
 
 
 def extract_code(raw_text: str, target_language: str) -> str:
@@ -51,13 +52,26 @@ class CodeTranspilerService:
     def _get_prompt(self, source_language: str, target_language: str) -> ChatPromptTemplate:
         return ChatPromptTemplate.from_messages([
             ("system",
-             f"You are an expert compiler engineer. Convert {source_language} code to idiomatic {target_language} code.\n"
+             f"You are an expert compiler engineer. Translate {source_language} code to idiomatic {target_language} code.\n"
              "IMPORTANT RULES:\n"
              f"1. Output ONLY {target_language} code — no markdown code blocks, no backticks.\n"
              "2. Do NOT add introductory or concluding text.\n"
-             "3. Include explicit error handling and necessary imports, following that language's conventions."),
+             "3. Preserve the behavior and structure of the source exactly. Translate only what is present: "
+             "do NOT add input validation, type checks, extra error handling, logging, comments or new features.\n"
+             "4. If the source already has error handling, translate it into the target language's conventions "
+             "(for example, exceptions to returned errors).\n"
+             "5. Include only the imports the code actually uses.\n"
+             "6. The code must compile: no unused imports and no unused local variables "
+             "(assign intentionally ignored values to `_` where the language allows it)."),
             ("user", "{code}")
         ])
+
+    def _normalize_validation(self,outcome, original_code: str) -> tuple[bool, str, str]:
+        """Accepts (ok, message) tuples or objects with .ok/.message/.code."""
+        if hasattr(outcome, "ok"):
+            return outcome.ok, outcome.message, outcome.code
+        is_valid, message = outcome
+        return is_valid, message, original_code
 
     async def transpile(
         self,
@@ -72,7 +86,7 @@ class CodeTranspilerService:
         """Asynchronously transpile code, utilizing cache and non-blocking I/O."""
         should_validate = kwargs.get("validate", validate_syntax)
         cache_key = transpile_cache.generate_key(source_code, source_language, target_language)
-
+        logger.info(f"Transpiling {source_language} to {target_language}, cache key {cache_key}")
         if use_cache:
             cached_result = transpile_cache.get(cache_key)
             if cached_result:
@@ -104,22 +118,11 @@ class CodeTranspilerService:
         if should_validate:
             validator = get_validator(target_language)
             if validator:
-                try:
-                    if inspect.iscoroutinefunction(validator):
-                        is_valid, message = await validator(generated_code)
-                    else:
-                        is_valid, message = await asyncio.to_thread(validator, generated_code)
-                except FileNotFoundError as e:
-                    logger.error(f"Validation tooling missing for {target_language}: {e}")
-                    raise ValidationToolUnavailableError() from e
-                except Exception as e:
-                    logger.error(f"Validator for {target_language} raised unexpectedly: {e}", exc_info=True)
-                    raise ValidationToolUnavailableError(
-                        f"{target_language} validation crashed unexpectedly: {str(e)}"
-                    ) from e
-
+                is_valid, message, generated_code = await self._validate_with_repair(
+                    validator, generated_code, target_language
+                )
                 if not is_valid:
-                    raise CodeValidationError(message)
+                    raise CodeValidationError(message, transpiled_code=generated_code)
             else:
                 message = f"No validator configured for {target_language}; skipped."
 
@@ -143,24 +146,6 @@ class CodeTranspilerService:
 
         return result
 
-    async def astream_transpile(
-        self,
-        source_code: str,
-        source_language: str,
-        target_language: str,
-    ) -> AsyncGenerator[str, None]:
-        """Asynchronously stream tokens directly from Gemini as they are generated."""
-        prompt = self._get_prompt(source_language, target_language)
-        chain = prompt | self.llm
-
-        try:
-            async for chunk in chain.astream({"code": source_code}):
-                text = self.extract_text_from_response(chunk)
-                if text:
-                    yield text
-        except ChatGoogleGenerativeAIError as e:
-            handle_llm_error(e, source_language, target_language)
-
     def extract_text_from_response(self, response) -> str:
         content = getattr(response, "content", response)
         if isinstance(content, str):
@@ -174,3 +159,59 @@ class CodeTranspilerService:
                     parts.append(block)
             return "".join(parts)
         return str(content)
+
+
+    async def _run_validator(self, validator, code: str, target_language: str):
+        try:
+            if inspect.iscoroutinefunction(validator):
+                outcome = await validator(code)
+            else:
+                outcome = await asyncio.to_thread(validator, code)
+        except FileNotFoundError as e:
+            logger.error(f"Validation tooling missing for {target_language}: {e}")
+            raise ValidationToolUnavailableError() from e
+        except Exception as e:
+            logger.error(f"Validator for {target_language} raised unexpectedly: {e}", exc_info=True)
+            raise ValidationToolUnavailableError(
+                f"{target_language} validation crashed unexpectedly: {str(e)}"
+            ) from e
+        return self._normalize_validation(outcome, code)
+
+    async def _repair_code(self, code: str, error: str, target_language: str) -> str:
+        prompt = ChatPromptTemplate.from_messages([
+            ("system",
+             "You are an expert {target_language} engineer. The code below failed compiler validation.\n"
+             "RULES:\n"
+             "1. Return the COMPLETE corrected file.\n"
+             "2. Fix only what the error reports; do not change behavior.\n"
+             "3. Output ONLY code, with no markdown code blocks and no explanations."),
+            ("user", "Validation error:\n{error}\n\nCode:\n{code}"),
+        ])
+        try:
+            response = await (prompt | self.llm).ainvoke(
+                {"target_language": target_language, "error": error, "code": code}
+            )
+        except ChatGoogleGenerativeAIError as e:
+            handle_llm_error(e, target_language, target_language)
+
+        text = self.extract_text_from_response(response)
+        return extract_code(text.strip(), target_language) if text else ""
+
+    async def _validate_with_repair(self, validator, code: str, target_language: str):
+        is_valid, message, code = await self._run_validator(validator, code, target_language)
+
+        for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
+            if is_valid:
+                break
+            logger.warning(
+                f"{target_language} validation failed "
+                f"(repair {attempt}/{MAX_REPAIR_ATTEMPTS}): {message}"
+            )
+            repaired = await self._repair_code(code, message, target_language)
+            if not repaired:
+                break
+            is_valid, message, code = await self._run_validator(validator, repaired, target_language)
+
+        return is_valid, message, code
+
+

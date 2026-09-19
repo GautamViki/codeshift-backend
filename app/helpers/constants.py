@@ -37,3 +37,5 @@ LANGUAGE_START_MARKERS = {
     "python": r'^(import|from|def|class)\s',
     # languages without a strong marker fall back to no trimming
 }
+
+MAX_CODE_BYTES = 1_000_000
