@@ -47,7 +47,6 @@ async def transpile_file(
         "success": True,
         "filename": f"{base_name}.{LANGUAGE_EXTENSIONS[target_language]}",
         "saved_path": result.get("saved_path"),
-        "transpiled_code": result.get("transpiled_code"),
         "validation_message": result.get("validation_message"),
         "cached": result.get("cached", False),
     }

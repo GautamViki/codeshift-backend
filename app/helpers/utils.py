@@ -1,8 +1,7 @@
 import re
 from app.helpers.exceptions import LLMProviderError
 from app.helpers.constants import LANGUAGE_EXTENSIONS, LANGUAGE_START_MARKERS, GOOGLE_ERROR_MAP
-from app.validators.go_validator import validate_go_code
-
+from app.validators.code_validator import ValidationFactory
 
 def extract_clean_message(exc: Exception, fallback: str) -> str:
     text = str(exc)
@@ -38,12 +37,6 @@ def handle_llm_error(exc: Exception, source_language: str, target_language: str)
             raise mapped_exc(extract_clean_message(exc, str(exc))) from exc
     raise LLMProviderError(str(exc)) from exc
 
-# Optional post-generation validators — only languages with real tooling
-# available get one; others simply skip validation.
-VALIDATORS = {
-    "go": validate_go_code,
-}
-
 def get_extension(language: str) -> str:
     return LANGUAGE_EXTENSIONS.get(language.lower(), "txt")
 
@@ -53,4 +46,11 @@ def get_start_marker(language: str) -> str | None:
 
 
 def get_validator(language: str):
-    return VALIDATORS.get(language.lower())
+    """
+    Returns an instance of BaseCodeValidator for the specified language,
+    or None if the language is unsupported.
+    """
+    try:
+        return ValidationFactory.get_validator(language)
+    except ValueError:
+        return None

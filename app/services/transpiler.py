@@ -7,17 +7,26 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 
 from app.helpers.exceptions import (
-    CodeValidationError, EmptyLLMResponseError,
-    FileWriteError, ValidationToolUnavailableError
+    CodeValidationError,
+    EmptyLLMResponseError,
+    FileWriteError,
+    ValidationToolUnavailableError,
 )
 from app.config import config
 from app.services.file_writer import save_generated_code
 from app.helpers.utils import (
-    get_extension, get_start_marker, get_validator, handle_llm_error
+    get_extension,
+    get_start_marker,
+    get_validator,
+    handle_llm_error,
 )
 from app.helpers.cache import transpile_cache
 from app.helpers.logger import logger
-from app.helpers.constants import GEMINI_MODEL_NAME, GEMINI_TEMPERATURE, THINKING_BUDGET
+from app.helpers.constants import (
+    GEMINI_MODEL_NAME,
+    GEMINI_TEMPERATURE,
+    THINKING_BUDGET,
+)
 
 MAX_REPAIR_ATTEMPTS = 2
 
@@ -35,8 +44,8 @@ def extract_code(raw_text: str, target_language: str) -> str:
         if match:
             text = text[match.start():]
 
-    text = re.sub(r'```.*$', '', text, flags=re.DOTALL).strip()
-    text = re.sub(r'^```\w*\n', '', text)
+    text = re.sub(r"```.*$", "", text, flags=re.DOTALL).strip()
+    text = re.sub(r"^```\w*\n", "", text)
     return text
 
 
@@ -46,30 +55,36 @@ class CodeTranspilerService:
             model=GEMINI_MODEL_NAME,
             temperature=GEMINI_TEMPERATURE,
             api_key=config.GOOGLE_API_KEY,
-            thinking_budget=THINKING_BUDGET
+            thinking_budget=THINKING_BUDGET,
         )
 
     def _get_prompt(self, source_language: str, target_language: str) -> ChatPromptTemplate:
         return ChatPromptTemplate.from_messages([
-            ("system",
-             f"You are an expert compiler engineer. Translate {source_language} code to idiomatic {target_language} code.\n"
-             "IMPORTANT RULES:\n"
-             f"1. Output ONLY {target_language} code — no markdown code blocks, no backticks.\n"
-             "2. Do NOT add introductory or concluding text.\n"
-             "3. Preserve the behavior and structure of the source exactly. Translate only what is present: "
-             "do NOT add input validation, type checks, extra error handling, logging, comments or new features.\n"
-             "4. If the source already has error handling, translate it into the target language's conventions "
-             "(for example, exceptions to returned errors).\n"
-             "5. Include only the imports the code actually uses.\n"
-             "6. The code must compile: no unused imports and no unused local variables "
-             "(assign intentionally ignored values to `_` where the language allows it)."),
-            ("user", "{code}")
+            (
+                "system",
+                f"You are an expert compiler engineer. Translate {source_language} code to idiomatic {target_language} code.\n"
+                "IMPORTANT RULES:\n"
+                f"1. Output ONLY {target_language} code — no markdown code blocks, no backticks.\n"
+                "2. Do NOT add introductory or concluding text.\n"
+                "3. Preserve the behavior and structure of the source exactly. Translate only what is present: "
+                "do NOT add input validation, type checks, extra error handling, logging, comments or new features.\n"
+                "4. If the source already has error handling, translate it into the target language's conventions "
+                "(for example, exceptions to returned errors).\n"
+                "5. Include only the imports the code actually uses.\n"
+                "6. The code must compile: no unused imports and no unused local variables "
+                "(assign intentionally ignored values to `_` where the language allows it).",
+            ),
+            ("user", "{code}"),
         ])
 
-    def _normalize_validation(self,outcome, original_code: str) -> tuple[bool, str, str]:
-        """Accepts (ok, message) tuples or objects with .ok/.message/.code."""
+    def _normalize_validation(self, outcome, original_code: str) -> tuple[bool, str, str]:
+        """
+        Normalizes validation outputs:
+        - ValidationResult (OOP validator) -> returns (outcome.ok, outcome.message, outcome.code)
+        - Tuple (legacy validator)         -> returns (is_valid, message, original_code)
+        """
         if hasattr(outcome, "ok"):
-            return outcome.ok, outcome.message, outcome.code
+            return outcome.ok, outcome.message, getattr(outcome, "code", original_code)
         is_valid, message = outcome
         return is_valid, message, original_code
 
@@ -160,11 +175,16 @@ class CodeTranspilerService:
             return "".join(parts)
         return str(content)
 
-
     async def _run_validator(self, validator, code: str, target_language: str):
+        """Invokes OOP BaseCodeValidator objects or legacy function-based validators."""
         try:
-            if inspect.iscoroutinefunction(validator):
+            # Polymorphic OOP Validator check (BaseCodeValidator instance)
+            if hasattr(validator, "validate"):
+                outcome = await validator.validate(code)
+            # Legacy coroutine function check
+            elif inspect.iscoroutinefunction(validator):
                 outcome = await validator(code)
+            # Legacy synchronous function check
             else:
                 outcome = await asyncio.to_thread(validator, code)
         except FileNotFoundError as e:
@@ -175,16 +195,19 @@ class CodeTranspilerService:
             raise ValidationToolUnavailableError(
                 f"{target_language} validation crashed unexpectedly: {str(e)}"
             ) from e
+
         return self._normalize_validation(outcome, code)
 
     async def _repair_code(self, code: str, error: str, target_language: str) -> str:
         prompt = ChatPromptTemplate.from_messages([
-            ("system",
-             "You are an expert {target_language} engineer. The code below failed compiler validation.\n"
-             "RULES:\n"
-             "1. Return the COMPLETE corrected file.\n"
-             "2. Fix only what the error reports; do not change behavior.\n"
-             "3. Output ONLY code, with no markdown code blocks and no explanations."),
+            (
+                "system",
+                "You are an expert {target_language} engineer. The code below failed compiler validation.\n"
+                "RULES:\n"
+                "1. Return the COMPLETE corrected file.\n"
+                "2. Fix only what the error reports; do not change behavior.\n"
+                "3. Output ONLY code, with no markdown code blocks and no explanations.",
+            ),
             ("user", "Validation error:\n{error}\n\nCode:\n{code}"),
         ])
         try:
@@ -213,5 +236,3 @@ class CodeTranspilerService:
             is_valid, message, code = await self._run_validator(validator, repaired, target_language)
 
         return is_valid, message, code
-
-
