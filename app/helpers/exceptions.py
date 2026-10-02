@@ -1,3 +1,12 @@
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+from app.helpers.logger import logger
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi import FastAPI
+
+
 class TranspilerError(Exception):
     status_code: int = 400
     app_code: int = 1000
@@ -123,3 +132,67 @@ class ValidationToolUnavailableError(TranspilerError):
     app_code = 3002
     default_message = "Validation tooling is not available on this server."
     error_type = "VALIDATION_TOOL_UNAVAILABLE"
+
+
+class ExceptionHandler:
+    FIELD_MESSAGES = {
+        "file": "Source file is required. Upload it as form-data field 'file'.",
+        "target_language": "Target language is required, e.g. 'go' or 'python'.",
+    }
+
+    def __init__(self, app: FastAPI):
+        self.app = app
+
+    async def transpiler_exception(self, exc: TranspilerError):
+        return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
+
+
+    async def unhandled_exception(self, request: Request, exc: Exception):
+        logger.error(
+            f"Unhandled exception on {request.method} {request.url.path} "
+            f"from {request.client.host if request.client else 'unknown'}: {exc}",
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "code": 9999,
+                "error_type": "INTERNAL_ERROR",
+                "message": "An unexpected error occurred.",
+                "path": request.url.path,
+            },
+        )
+
+    async def validation_exception(self, exc: RequestValidationError):
+        details = []
+        for err in exc.errors():
+            field = str(err["loc"][-1]) if err["loc"] else "unknown"
+            message = (
+                self.FIELD_MESSAGES.get(field, f"'{field}' is required.")
+                if err["type"] == "missing"
+                else err["msg"]
+            )
+            details.append({"field": field, "message": message})
+
+        return JSONResponse(
+            status_code=422,
+            content={
+                "success": False,
+                "error": "VALIDATION_ERROR",
+                "message": "Invalid request.",
+                "details": details,
+            },
+        )
+
+    async def http_exception(self, exc: StarletteHTTPException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"success": False, "error": "HTTP_ERROR", "message": exc.detail},
+        )
+
+    def register_exception(self) -> None:
+        self.app.add_exception_handler(TranspilerError, self.transpiler_exception)
+        self.app.add_exception_handler(RequestValidationError, self.validation_exception)
+        self.app.add_exception_handler(StarletteHTTPException, self.http_exception)
+        self.app.add_exception_handler(Exception, self.unhandled_exception)

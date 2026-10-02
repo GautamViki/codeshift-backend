@@ -17,7 +17,7 @@ class ProcessRunner:
     """Encapsulates subprocess execution and timeouts."""
 
     @staticmethod
-    async def run(*cmd: str, cwd: str, timeout: float = 30.0) -> Tuple[int, str]:
+    async def run(*cmd: str, cwd: str, timeout: float = 30.0) -> tuple[int, str] | tuple[int | None, str]:
         proc = await asyncio.create_subprocess_exec(*cmd, cwd=cwd, stdout=PIPE, stderr=PIPE)
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)

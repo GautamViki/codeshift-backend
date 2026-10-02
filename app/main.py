@@ -2,12 +2,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import url_def
-from app.helpers.exception_handlers import register_exception_handlers
+from app.helpers.exceptions import ExceptionHandler
 from app.helpers.lifespan import lifespan
-from app.helpers.middleware import log_requests
-from app.helpers.warnings_config import configure_warnings
+from app.helpers.logger import logger
 
-configure_warnings()
+logger.configure_warnings()
 
 app = FastAPI(
     title="Polyglot Refactor Engine",
@@ -31,8 +30,8 @@ app.add_middleware(
 )
 
 app.include_router(url_def.router)
-app.middleware("http")(log_requests)
-register_exception_handlers(app)
+app.middleware("http")(logger.log_requests)
+ExceptionHandler(app).register_exception()
 
 
 @app.get("/")
