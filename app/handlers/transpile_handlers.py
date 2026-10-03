@@ -31,8 +31,8 @@ async def transpile_file(
     try:
         source_code = source_bytes.decode("utf-8")
     except UnicodeDecodeError:
-        logger.error(f"Source code {source_language} not supported.")
-        raise err.InvalidPythonSyntaxError("Uploaded file is not valid UTF-8 text.")
+        logger.error(f"Source file {file.filename} is not valid UTF-8 text.")
+        raise err.InvalidFileEncodingError("Uploaded file is not valid UTF-8 text.")
 
     result = await transpiler.transpile(
         source_code=source_code,

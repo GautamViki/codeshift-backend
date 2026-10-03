@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import app.config  # ensures environment variables are loaded
 from app.api import url_def
 from app.helpers.exceptions import ExceptionHandler
 from app.helpers.lifespan import lifespan

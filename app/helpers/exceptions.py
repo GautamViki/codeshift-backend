@@ -134,18 +134,65 @@ class ValidationToolUnavailableError(TranspilerError):
     error_type = "VALIDATION_TOOL_UNAVAILABLE"
 
 
+# ---- Auth, Database & Resource errors ----
+
+class AuthenticationError(TranspilerError):
+    status_code = 401
+    app_code = 4001
+    default_message = "Authentication failed."
+    error_type = "AUTHENTICATION_FAILED"
+
+
+class ConflictError(TranspilerError):
+    status_code = 409
+    app_code = 4009
+    default_message = "Resource already exists."
+    error_type = "CONFLICT_ERROR"
+
+
+class ValidationError(TranspilerError):
+    status_code = 422
+    app_code = 4022
+    default_message = "Validation error."
+    error_type = "VALIDATION_ERROR"
+
+
+class DatabaseError(TranspilerError):
+    status_code = 503
+    app_code = 5001
+    default_message = "Database service is temporarily unavailable. Please retry later."
+    error_type = "DATABASE_ERROR"
+
+
 class ExceptionHandler:
     FIELD_MESSAGES = {
         "file": "Source file is required. Upload it as form-data field 'file'.",
         "target_language": "Target language is required, e.g. 'go' or 'python'.",
+        "email": "A valid email address is required.",
+        "password": "Password is required.",
     }
 
     def __init__(self, app: FastAPI):
         self.app = app
 
-    async def transpiler_exception(self, exc: TranspilerError):
+    async def transpiler_exception(self, request: Request, exc: TranspilerError):
         return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
 
+    async def sqlalchemy_exception(self, request: Request, exc: Exception):
+        logger.error(
+            f"Database error on {request.method} {request.url.path} "
+            f"from {request.client.host if request.client else 'unknown'}: {exc}",
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "code": 5001,
+                "error_type": "DATABASE_ERROR",
+                "message": "Database is temporarily unavailable. Please try again later.",
+            },
+        )
 
     async def unhandled_exception(self, request: Request, exc: Exception):
         logger.error(
@@ -164,7 +211,7 @@ class ExceptionHandler:
             },
         )
 
-    async def validation_exception(self, exc: RequestValidationError):
+    async def validation_exception(self, request: Request, exc: RequestValidationError):
         details = []
         for err in exc.errors():
             field = str(err["loc"][-1]) if err["loc"] else "unknown"
@@ -185,14 +232,17 @@ class ExceptionHandler:
             },
         )
 
-    async def http_exception(self, exc: StarletteHTTPException):
+    async def http_exception(self, request: Request, exc: StarletteHTTPException):
         return JSONResponse(
             status_code=exc.status_code,
             content={"success": False, "error": "HTTP_ERROR", "message": exc.detail},
         )
 
     def register_exception(self) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
         self.app.add_exception_handler(TranspilerError, self.transpiler_exception)
         self.app.add_exception_handler(RequestValidationError, self.validation_exception)
         self.app.add_exception_handler(StarletteHTTPException, self.http_exception)
+        self.app.add_exception_handler(SQLAlchemyError, self.sqlalchemy_exception)
         self.app.add_exception_handler(Exception, self.unhandled_exception)
