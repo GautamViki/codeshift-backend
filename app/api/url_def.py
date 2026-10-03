@@ -13,6 +13,7 @@ router.add_api_route(
     summary="Transpile an uploaded source file",
     responses={
         400: {"description": "Unsupported language or invalid file"},
+        401: {"description": "Invalid or missing bearer token"},
         422: {"description": "Validation error"},
     },
 )
@@ -23,6 +24,9 @@ router.add_api_route(
     methods=["POST"],
     tags=["transpile"],
     summary="Transpile code sent as a plain text body",
+    responses={
+        401: {"description": "Invalid or missing bearer token"},
+    },
     openapi_extra={
         "requestBody": {
             "required": True,

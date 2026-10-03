@@ -1,8 +1,13 @@
 from pathlib import Path
 from fastapi.responses import PlainTextResponse
-from fastapi import UploadFile, File, Form, Request, Query
+from fastapi import UploadFile, File, Form, Request, Query, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.helpers import LANGUAGE_EXTENSIONS, MAX_CODE_BYTES, logger, exceptions as err
 from app.services.transpiler import CodeTranspilerService
+from app.dependencies import get_current_user
+from app.database import get_db
+from app.models.user import User
+from app.models.transpilation import Transpilation
 
 transpiler = CodeTranspilerService()
 EXTENSION_TO_LANGUAGE = {ext: lang for lang, ext in LANGUAGE_EXTENSIONS.items()}
@@ -12,6 +17,8 @@ async def transpile_file(
     target_language: str = Form(...),
     validate_syntax: bool = Form(True),
     use_cache: bool = Form(True),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     ext = Path(file.filename).suffix.lstrip(".")
     source_language = EXTENSION_TO_LANGUAGE.get(ext)
@@ -43,8 +50,20 @@ async def transpile_file(
         use_cache=use_cache,
     )
 
+    saved = await Transpilation.save_transpilation(
+        db=db,
+        user_id=current_user.id,
+        source_code=source_code,
+        source_language=source_language,
+        target_language=target_language,
+        transpiled_code=result["transpiled_code"],
+        validated=result.get("success", False),
+        validation_message=result.get("validation_message"),
+    )
+
     return {
         "success": True,
+        "transpilation_id": saved.id,
         "filename": f"{base_name}.{LANGUAGE_EXTENSIONS[target_language]}",
         "saved_path": result.get("saved_path"),
         "validation_message": result.get("validation_message"),
@@ -57,6 +76,7 @@ async def transpile_raw(
     target_language: str = Query(...),
     validate_syntax: bool = Query(True),
     use_cache: bool = Query(True),
+    current_user: User = Depends(get_current_user),
 ):
     body = await request.body()
     if len(body) > MAX_CODE_BYTES:
@@ -85,6 +105,16 @@ async def transpile_raw(
         base_name="snippet",
         validate_syntax=validate_syntax,
         use_cache=use_cache,
+    )
+
+    await Transpilation.save_transpilation(
+        user_id=current_user.id,
+        source_code=source_code,
+        source_language=source_language,
+        target_language=target_language,
+        transpiled_code=result["transpiled_code"],
+        validated=result.get("success", False),
+        validation_message=result.get("validation_message"),
     )
 
     return PlainTextResponse(

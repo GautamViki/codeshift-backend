@@ -190,7 +190,7 @@ class ExceptionHandler:
                 "success": False,
                 "code": 5001,
                 "error_type": "DATABASE_ERROR",
-                "message": "Database is temporarily unavailable. Please try again later.",
+                "message": f"Database is temporarily unavailable. Please try again later.",
             },
         )
 
@@ -233,6 +233,16 @@ class ExceptionHandler:
         )
 
     async def http_exception(self, request: Request, exc: StarletteHTTPException):
+        if exc.status_code == 401:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "success": False,
+                    "error": "AUTHENTICATION_ERROR",
+                    "message": "Authentication required. Please provide a valid Bearer token in the Authorization header.",
+                },
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         return JSONResponse(
             status_code=exc.status_code,
             content={"success": False, "error": "HTTP_ERROR", "message": exc.detail},

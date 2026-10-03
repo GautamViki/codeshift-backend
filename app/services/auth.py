@@ -56,6 +56,7 @@ class AuthService:
                 raise err.DatabaseError()
             raise
 
+
     async def login(self, db: AsyncSession, email: str, password: str) -> str:
         email = email.strip().lower()
         try:
@@ -74,6 +75,7 @@ class AuthService:
                 logger.error(f"Database error during login: {exc}", exc_info=True)
                 raise err.DatabaseError()
             raise
+
 
     async def get_current_user(self, db: AsyncSession, token: str) -> User:
         try:
@@ -96,7 +98,7 @@ class AuthService:
                 logger.error(f"Database error during get_current_user: {exc}", exc_info=True)
                 raise err.DatabaseError()
             raise
-        return user
+
 
     def _create_token(self, user_id: int) -> str:
         expire = datetime.now(timezone.utc) + timedelta(minutes=self.ACCESS_TOKEN_EXPIRE_MINUTES)

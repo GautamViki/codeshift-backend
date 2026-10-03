@@ -1,12 +1,11 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from chromadb import db
 from sqlalchemy import ForeignKey, Text, UniqueConstraint, select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
-
+from app.database import Base, SessionLocal
 from app.helpers.utils import generate_hash
 
 if TYPE_CHECKING:
@@ -32,12 +31,13 @@ class Transpilation(Base):
     user: Mapped["User"] = relationship(back_populates="transpilations")
 
     __table_args__ = (
-        UniqueConstraint("source_hash", "target_language", name="uq_source_target"),
+        UniqueConstraint("user_id", "source_hash", "target_language", name="uq_user_source_target"),
     )
 
+    @staticmethod
     async def find_cached_transpilation(
-            self, source_code: str, source_language: str, target_language: str
-    ) -> Transpilation | None:
+            db: AsyncSession, source_code: str, source_language: str, target_language: str
+    ) -> "Transpilation | None":
         """Read-only lookup by content hash, across all users."""
         source_hash = generate_hash(source_code, source_language, target_language)
         result = await db.execute(
@@ -48,27 +48,47 @@ class Transpilation(Base):
         )
         return result.scalar_one_or_none()
 
+    @staticmethod
     async def save_transpilation(
-            self,
             user_id: int,
             source_code: str,
             source_language: str,
             target_language: str,
             transpiled_code: str,
             validated: bool,
-    ) -> Transpilation:
-        """Write-only. Inserts a new row, owned by user_id from the start."""
+            validation_message: str | None = None,
+    ) -> "Transpilation":
+        """
+        Opens its own database session. Checks if this exact combo was
+        already transpiled for this user; if so, returns the existing row.
+        Otherwise inserts and returns the new row.
+        """
         source_hash = generate_hash(source_code, source_language, target_language)
-        new_row = Transpilation(
-            user_id=user_id,
-            source_hash=source_hash,
-            source_language=source_language,
-            target_language=target_language,
-            source_code=source_code,
-            transpiled_code=transpiled_code,
-            validated=validated,
-        )
-        db.add(new_row)
-        await db.commit()
-        await db.refresh(new_row)
-        return new_row
+
+        async with SessionLocal() as db:
+            existing = await db.execute(
+                select(Transpilation).where(
+                    Transpilation.user_id == user_id,
+                    Transpilation.source_hash == source_hash,
+                    Transpilation.target_language == target_language,
+                )
+            )
+            existing_row = existing.scalar_one_or_none()
+            if existing_row:
+                return existing_row
+
+            new_row = Transpilation(
+                user_id=user_id,
+                source_hash=source_hash,
+                source_language=source_language,
+                target_language=target_language,
+                source_code=source_code,
+                transpiled_code=transpiled_code,
+                validated=validated,
+                validation_message=validation_message,
+                created_at=datetime.utcnow(),
+            )
+            db.add(new_row)
+            await db.commit()
+            await db.refresh(new_row)
+            return new_row
