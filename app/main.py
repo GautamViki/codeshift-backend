@@ -28,6 +28,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],  # Allows OPTIONS, POST, GET, etc.
     allow_headers=["*"],  # Allows Content-Type and custom headers
+    expose_headers=["X-Request-ID"],
 )
 
 app.include_router(url_def.router)

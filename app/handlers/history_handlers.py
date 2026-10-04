@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.helpers import logger
 from app.models.user import User
 from app.services.history import TranspilationHistoryService
 
@@ -15,7 +16,9 @@ async def get_history(
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info("History retrieval started | limit=%s | offset=%s", limit, offset)
     rows = await history_service.list_for_user(db, user.id, limit, offset)
+    logger.info("History retrieval completed | records=%s", len(rows))
     return [
         {
             "id": r.id,

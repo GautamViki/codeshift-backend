@@ -1,10 +1,13 @@
 # app/validators/base_validator.py
 import asyncio
 import os
+import time
 from abc import ABC, abstractmethod
 from asyncio.subprocess import PIPE
 from dataclasses import dataclass
 from typing import Optional
+
+from app.helpers.logger import logger
 
 
 @dataclass
@@ -21,13 +24,51 @@ class ProcessRunner:
     async def run(
         *cmd: str, cwd: str, timeout: float = 30.0
     ) -> tuple[int, str] | tuple[int | None, str]:
-        proc = await asyncio.create_subprocess_exec(*cmd, cwd=cwd, stdout=PIPE, stderr=PIPE)
+        command = " ".join(cmd)
+        started_at = time.perf_counter()
+        logger.info("Starting subprocess: %s", command)
+        try:
+            proc = await asyncio.create_subprocess_exec(*cmd, cwd=cwd, stdout=PIPE, stderr=PIPE)
+        except Exception as exc:
+            logger.error(
+                "Subprocess start exception | command=%s | type=%s | message=%s",
+                command,
+                type(exc).__name__,
+                exc,
+            )
+            raise
+
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as exc:
             proc.kill()
             await proc.wait()
-            return 124, f"{cmd[0]} timed out after {timeout:.0f}s"
+            duration_ms = (time.perf_counter() - started_at) * 1000
+            message = f"{cmd[0]} timed out after {timeout:.0f}s"
+            logger.error(
+                "Subprocess timeout exception | command=%s | type=%s | message=%s | duration_ms=%.2f",
+                command,
+                type(exc).__name__,
+                exc,
+                duration_ms,
+            )
+            return 124, message
+        except Exception as exc:
+            logger.error(
+                "Subprocess execution exception | command=%s | type=%s | message=%s",
+                command,
+                type(exc).__name__,
+                exc,
+            )
+            raise
+
+        duration_ms = (time.perf_counter() - started_at) * 1000
+        logger.info(
+            "Subprocess completed: %s | exit_code=%s | duration_ms=%.2f",
+            command,
+            proc.returncode,
+            duration_ms,
+        )
         return proc.returncode, (stdout + stderr).decode("utf-8", errors="replace")
 
 

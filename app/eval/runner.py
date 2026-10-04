@@ -3,8 +3,11 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import Any
+
+from app.helpers.logger import logger
 
 
 @dataclass
@@ -60,6 +63,12 @@ class EvalRunner:
                 use_cache=False,
             )
         except Exception as exc:
+            logger.error(
+                "Evaluation case transpilation exception | case_id=%s | type=%s | message=%s",
+                case.id,
+                type(exc).__name__,
+                exc,
+            )
             return EvalResult(
                 case_id=case.id,
                 passed=False,
@@ -84,6 +93,12 @@ class EvalRunner:
             else:
                 raise NotImplementedError(f"Eval execution not supported for {case.target_lang}")
         except Exception as exc:
+            logger.error(
+                "Evaluation case execution exception | case_id=%s | type=%s | message=%s",
+                case.id,
+                type(exc).__name__,
+                exc,
+            )
             return EvalResult(
                 case_id=case.id,
                 passed=False,
@@ -120,19 +135,50 @@ class EvalRunner:
             with open(file_path, "w", encoding="utf-8") as handle:
                 handle.write(final_code)
 
-            proc = subprocess.run(
-                ["go", "run", "main.go"],
-                cwd=tmpdir,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            command = ["go", "run", "main.go"]
+            started_at = time.perf_counter()
+            logger.info("Starting evaluation subprocess: %s", " ".join(command))
+            try:
+                proc = subprocess.run(
+                    command,
+                    cwd=tmpdir,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Evaluation subprocess exception | command=%s | type=%s | message=%s",
+                    " ".join(command),
+                    type(exc).__name__,
+                    exc,
+                )
+                raise
+
+            duration_ms = (time.perf_counter() - started_at) * 1000
             if proc.returncode != 0:
+                logger.info(
+                    "Evaluation subprocess completed: %s | exit_code=%s | duration_ms=%.2f",
+                    " ".join(command),
+                    proc.returncode,
+                    duration_ms,
+                )
                 raise RuntimeError(proc.stderr or proc.stdout)
+            logger.info(
+                "Evaluation subprocess completed: %s | exit_code=%s | duration_ms=%.2f",
+                " ".join(command),
+                proc.returncode,
+                duration_ms,
+            )
 
             try:
                 return json.loads(proc.stdout.strip())
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
+                logger.error(
+                    "Evaluation output JSON parsing exception | type=%s | message=%s",
+                    type(exc).__name__,
+                    exc,
+                )
                 return proc.stdout.strip()
 
     @staticmethod

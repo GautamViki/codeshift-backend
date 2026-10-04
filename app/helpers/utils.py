@@ -3,6 +3,7 @@ import re
 
 from app.helpers.constants import GOOGLE_ERROR_MAP, LANGUAGE_EXTENSIONS, LANGUAGE_START_MARKERS
 from app.helpers.exceptions import LLMProviderError
+from app.helpers.logger import logger
 from app.validators.code_validator import ValidationFactory
 
 
@@ -27,8 +28,12 @@ def extract_clean_message(exc: Exception, fallback: str) -> str:
             )
             if clean:
                 return clean
-        except Exception:
-            pass
+        except Exception as parse_exc:
+            logger.error(
+                "Could not extract nested provider error message | type=%s | message=%s",
+                type(parse_exc).__name__,
+                parse_exc,
+            )
 
     return fallback.replace("\\\\n", "\n").replace("\\n", "\n").split("\n")[0].strip()
 
@@ -38,8 +43,22 @@ def handle_llm_error(exc: Exception, source_language: str, target_language: str)
     logging at the appropriate severity before raising."""
     for exc_type, (mapped_exc, log_fn, log_prefix) in GOOGLE_ERROR_MAP.items():
         if isinstance(exc, exc_type):
-            log_fn(f"{log_prefix} ({source_language}->{target_language}): {exc}")
+            log_fn(
+                "%s (%s->%s) | type=%s | message=%s",
+                log_prefix,
+                source_language,
+                target_language,
+                type(exc).__name__,
+                exc,
+            )
             raise mapped_exc(extract_clean_message(exc, str(exc))) from exc
+    logger.error(
+        "Provider exception | source=%s | target=%s | type=%s | message=%s",
+        source_language,
+        target_language,
+        type(exc).__name__,
+        exc,
+    )
     raise LLMProviderError(str(exc)) from exc
 
 
@@ -58,7 +77,8 @@ def get_validator(language: str):
     """
     try:
         return ValidationFactory.get_validator(language)
-    except ValueError:
+    except ValueError as exc:
+        logger.error("Validator lookup failed | type=%s | message=%s", type(exc).__name__, exc)
         return None
 
 

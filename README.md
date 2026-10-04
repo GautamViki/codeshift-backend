@@ -91,7 +91,7 @@ pip install -r requirements.txt
 ### 2. Start the app
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+ENVIRONMENT=development uv run uvicorn app.main:app --reload --reload-exclude 'app/generated_code/**' --host 0.0.0.0 --port 8080
 ```
 
 ### 3. Open API docs
@@ -277,4 +277,3 @@ codeshift-backend/
 ├── README.md
 └── .env.example (if present in your environment)
 ```
-

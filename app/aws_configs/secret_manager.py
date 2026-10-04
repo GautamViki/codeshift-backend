@@ -19,5 +19,10 @@ def get_aws_secret(secret_name: str, region_name: str = "us-east-1") -> str | No
         logger.debug("boto3 is not installed. Skipping AWS SSM secret retrieval.")
         return None
     except (BotoCoreError, ClientError, Exception) as e:
-        logger.warning("Could not fetch secret '%s' from AWS SSM: %s", secret_name, e)
+        logger.error(
+            "AWS SSM retrieval exception | secret_name=%s | type=%s | message=%s",
+            secret_name,
+            type(e).__name__,
+            e,
+        )
         return None

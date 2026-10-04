@@ -184,8 +184,12 @@ class ExceptionHandler:
 
     async def sqlalchemy_exception(self, request: Request, exc: Exception):
         logger.error(
-            f"Database error on {request.method} {request.url.path} "
-            f"from {request.client.host if request.client else 'unknown'}: {exc}",
+            "Database exception on %s %s from %s | type=%s | message=%s",
+            request.method,
+            request.url.path,
+            request.client.host if request.client else "unknown",
+            type(exc).__name__,
+            exc,
             exc_info=True,
         )
         return await self.transpiler_exception(
@@ -194,9 +198,15 @@ class ExceptionHandler:
         )
 
     async def unhandled_exception(self, request: Request, exc: Exception):
+        request_id = getattr(request.state, "request_id", "-")
         logger.error(
-            f"Unhandled exception on {request.method} {request.url.path} "
-            f"from {request.client.host if request.client else 'unknown'}: {exc}",
+            "Unhandled exception | %s | %s %s from %s | type=%s | message=%s",
+            request_id,
+            request.method,
+            request.url.path,
+            request.client.host if request.client else "unknown",
+            type(exc).__name__,
+            exc,
             exc_info=True,
         )
         return JSONResponse(
@@ -208,6 +218,7 @@ class ExceptionHandler:
                 "message": "An unexpected error occurred.",
                 "path": request.url.path,
             },
+            headers={"X-Request-ID": request_id} if request_id != "-" else None,
         )
 
     async def validation_exception(self, request: Request, exc: RequestValidationError):

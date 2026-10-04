@@ -126,12 +126,14 @@ class CodeTranspilerService:
         cache_key = transpile_cache.generate_key(source_code, source_language, target_language)
         logger.info(f"Transpiling {source_language} to {target_language}, cache key {cache_key}")
         if use_cache:
+            logger.info("Checking transpilation cache")
             cached_result = transpile_cache.get(cache_key)
             if cached_result:
                 logger.info(
                     f"Cache HIT for {source_language} -> {target_language} (key: {cache_key[:8]})"
                 )
                 return {**cached_result, "cached": True}
+            logger.info("Transpilation cache MISS")
 
         if not base_name:
             base_name = datetime.now().strftime("transpiled_%Y%b%d_%Hh_%Mm_%Ss")
@@ -140,10 +142,13 @@ class CodeTranspilerService:
         chain = prompt | self.llm
 
         try:
+            logger.info("Requesting generated code from provider")
             response = await chain.ainvoke({"code": source_code})
+            logger.info("Provider response received")
         except ChatGoogleGenerativeAIError as e:
             handle_llm_error(e, source_language, target_language)
 
+        logger.info("Extracting generated code from provider response")
         content = self.extract_text_from_response(response)
         raw_output = content.strip() if content else ""
 
@@ -155,11 +160,13 @@ class CodeTranspilerService:
             raise EmptyLLMResponseError(
                 f"Model response did not contain any {target_language} code."
             )
+        logger.info("Generated code extracted")
 
         is_valid, message, repair_attempts = True, f"Validation skipped for {target_language}.", 0
         if should_validate:
             validator = get_validator(target_language)
             if validator:
+                logger.info("Starting generated-code validation for %s", target_language)
                 (
                     is_valid,
                     message,
@@ -169,6 +176,9 @@ class CodeTranspilerService:
                 if not is_valid:
                     raise CodeValidationError(message, transpiled_code=generated_code)
             else:
+                logger.info(
+                    "Generated-code validation skipped: no validator for %s", target_language
+                )
                 message = f"No validator configured for {target_language}; skipped."
 
         logger.info(
@@ -178,9 +188,16 @@ class CodeTranspilerService:
 
         try:
             extension = get_extension(target_language)
+            logger.info("Saving generated code")
             saved_path = str(save_generated_code(generated_code, base_name, extension))
+            logger.info("Generated code saved: %s", saved_path)
         except OSError as e:
-            logger.error(f"Failed to write generated file for base_name={base_name}: {e}")
+            logger.error(
+                "Generated-file write exception | filename=%s | type=%s | message=%s",
+                base_name,
+                type(e).__name__,
+                e,
+            )
             raise FileWriteError(f"Could not write generated file: {str(e)}") from e
 
         result = {
@@ -194,6 +211,7 @@ class CodeTranspilerService:
         }
 
         if use_cache and is_valid:
+            logger.info("Caching successful transpilation result")
             transpile_cache.set(cache_key, result)
 
         return result
@@ -201,11 +219,25 @@ class CodeTranspilerService:
     async def evaluate_cases(self, prompt_version: str = "v1", cases=None):
         """Run the curated evaluation suite against the current transpiler and return a summary."""
         tasks = cases or EVAL_CASES
+        logger.info(
+            "Evaluation service started | prompt_version=%s | cases=%s",
+            prompt_version,
+            len(tasks),
+        )
         runner = EvalRunner(self, prompt_version)
         results = []
         for case in tasks:
+            case_id = case.get("id") if isinstance(case, dict) else case.id
+            logger.info("Running evaluation case | case_id=%s", case_id)
             results.append(await runner.run_case(case))
-        return summarize(results)
+        summary = summarize(results)
+        logger.info(
+            "Evaluation service completed | total=%s | passed=%s | failed=%s",
+            summary.total,
+            summary.passed,
+            summary.failed,
+        )
+        return summary
 
     def extract_text_from_response(self, response) -> str:
         content = getattr(response, "content", response)
@@ -224,6 +256,7 @@ class CodeTranspilerService:
     async def _run_validator(self, validator, code: str, target_language: str):
         """Invokes OOP BaseCodeValidator objects or legacy function-based validators."""
         try:
+            logger.info("Running %s validator", target_language)
             # Polymorphic OOP Validator check (BaseCodeValidator instance)
             if hasattr(validator, "validate"):
                 outcome = await validator.validate(code)
@@ -234,10 +267,20 @@ class CodeTranspilerService:
             else:
                 outcome = await asyncio.to_thread(validator, code)
         except FileNotFoundError as e:
-            logger.error(f"Validation tooling missing for {target_language}: {e}")
+            logger.error(
+                "Validation tooling exception | language=%s | type=%s | message=%s",
+                target_language,
+                type(e).__name__,
+                e,
+            )
             raise ValidationToolUnavailableError() from e
         except Exception as e:
-            logger.error(f"Validator for {target_language} raised unexpectedly: {e}", exc_info=True)
+            logger.error(
+                "Validator exception | language=%s | type=%s | message=%s",
+                target_language,
+                type(e).__name__,
+                e,
+            )
             raise ValidationToolUnavailableError(
                 f"{target_language} validation crashed unexpectedly: {str(e)}"
             ) from e
@@ -246,12 +289,14 @@ class CodeTranspilerService:
 
         # A timeout is a tooling problem: the model can't fix it, so don't spend repair calls on it.
         if not is_valid and is_tooling_failure(message):
-            logger.error(f"Validation tooling failure for {target_language}: {message}")
+            logger.info("Validation tooling failure for %s: %s", target_language, message)
             raise ValidationToolUnavailableError(message)
 
+        logger.info("Validator finished: %s | success=%s", target_language, is_valid)
         return is_valid, message, validated_code
 
     async def _repair_code(self, code: str, error: str, target_language: str) -> str:
+        logger.info("Requesting generated-code repair for %s", target_language)
         prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -274,7 +319,9 @@ class CodeTranspilerService:
             handle_llm_error(e, target_language, target_language)
 
         text = self.extract_text_from_response(response)
-        return extract_code(text.strip(), target_language) if text else ""
+        repaired_code = extract_code(text.strip(), target_language) if text else ""
+        logger.info("Generated-code repair response received for %s", target_language)
+        return repaired_code
 
     async def _validate_with_repair(self, validator, code: str, target_language: str):
         """
@@ -287,15 +334,25 @@ class CodeTranspilerService:
         for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
             if is_valid:
                 break
-            logger.warning(
-                f"{target_language} validation failed "
-                f"(repair {attempt}/{MAX_REPAIR_ATTEMPTS}): {message}"
+            logger.info(
+                "%s validation failed; starting repair pass %s/%s",
+                target_language,
+                attempt,
+                MAX_REPAIR_ATTEMPTS,
+            )
+            logger.info(
+                "%s validation failed (repair %s/%s): %s",
+                target_language,
+                attempt,
+                MAX_REPAIR_ATTEMPTS,
+                message,
             )
             repaired = await self._repair_code(code, message, target_language)
             if not repaired:
+                logger.info("Generated-code repair returned no code; stopping repair attempts")
                 break
             if repaired.strip() == code.strip():
-                logger.warning(f"{target_language} repair returned unchanged code; stopping.")
+                logger.info("%s repair returned unchanged code; stopping", target_language)
                 break
             repairs = attempt
             is_valid, message, code = await self._run_validator(

@@ -19,6 +19,7 @@ class TranspilationHistoryService:
         source_hash: str,
         target_language: str,
     ) -> Transpilation | None:
+        logger.info("Checking user transpilation history for existing record")
         result = await session.execute(
             select(Transpilation).where(
                 Transpilation.user_id == user_id,
@@ -26,12 +27,17 @@ class TranspilationHistoryService:
                 Transpilation.target_language == target_language,
             )
         )
-        return result.scalar_one_or_none()
+        existing = result.scalar_one_or_none()
+        logger.info(
+            "Existing transpilation record lookup completed | found=%s", existing is not None
+        )
+        return existing
 
     async def find_cached(
         self, db: AsyncSession, source_code: str, source_language: str, target_language: str
     ) -> Transpilation | None:
         """Read-only lookup by content hash, across all users."""
+        logger.info("Cached transpilation history lookup started")
         source_hash = generate_hash(source_code, source_language, target_language)
         try:
             result = await db.execute(
@@ -40,10 +46,19 @@ class TranspilationHistoryService:
                     Transpilation.target_language == target_language,
                 )
             )
-            return result.scalar_one_or_none()
-        except SQLAlchemyError as exc:
-            logger.error(f"Database error looking up cached transpilation: {exc}", exc_info=True)
-            raise err.DatabaseError()
+            existing = result.scalar_one_or_none()
+            logger.info(
+                "Cached transpilation history lookup completed | found=%s", existing is not None
+            )
+            return existing
+        except (SQLAlchemyError, ConnectionError) as exc:
+            logger.error(
+                "Database exception during cached transpilation lookup | type=%s | message=%s",
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            raise err.DatabaseError() from exc
 
     async def save(
         self,
@@ -56,13 +71,21 @@ class TranspilationHistoryService:
         validation_message: str | None = None,
     ) -> Transpilation:
         """Save a transpilation using a session owned by this operation."""
+        logger.info(
+            "Transpilation history save started | user_id=%s | source=%s | target=%s",
+            user_id,
+            source_language,
+            target_language,
+        )
         source_hash = generate_hash(source_code, source_language, target_language)
         async with SessionLocal() as session:
             try:
                 existing = await self._find_existing(session, user_id, source_hash, target_language)
                 if existing is not None:
+                    logger.info("Reusing existing transpilation history record")
                     return existing
 
+                logger.info("Creating transpilation history record")
                 row = Transpilation(
                     user_id=user_id,
                     source_hash=source_hash,
@@ -77,25 +100,41 @@ class TranspilationHistoryService:
                 session.add(row)
                 await session.commit()
                 await session.refresh(row)
+                logger.info("Transpilation history save completed")
                 return row
             except IntegrityError as exc:
                 await session.rollback()
                 existing = await self._find_existing(session, user_id, source_hash, target_language)
                 if existing is not None:
+                    logger.info("Reusing concurrently created transpilation history record")
                     return existing
                 logger.error(
-                    "Database integrity error saving transpilation history.", exc_info=True
+                    "Database exception while saving transpilation history | type=%s | message=%s",
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
                 )
                 raise err.DatabaseError() from exc
-            except SQLAlchemyError as exc:
+            except (SQLAlchemyError, ConnectionError) as exc:
                 await session.rollback()
-                logger.error(f"Database error saving transpilation history: {exc}", exc_info=True)
+                logger.error(
+                    "Database exception while saving transpilation history | type=%s | message=%s",
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
+                )
                 raise err.DatabaseError() from exc
 
     async def list_for_user(
         self, db: AsyncSession, user_id: int, limit: int = 20, offset: int = 0
     ) -> list[Transpilation]:
         """Read-only. A user's own history, most recent first."""
+        logger.info(
+            "User transpilation history query started | user_id=%s | limit=%s | offset=%s",
+            user_id,
+            limit,
+            offset,
+        )
         try:
             result = await db.execute(
                 select(Transpilation)
@@ -104,10 +143,15 @@ class TranspilationHistoryService:
                 .limit(limit)
                 .offset(offset)
             )
-            return list(result.scalars())
-        except SQLAlchemyError as exc:
+            rows = list(result.scalars())
+            logger.info("User transpilation history query completed | records=%s", len(rows))
+            return rows
+        except (SQLAlchemyError, ConnectionError) as exc:
             logger.error(
-                f"Database error listing transpilation history for user {user_id}: {exc}",
+                "Database exception while listing history for user %s | type=%s | message=%s",
+                user_id,
+                type(exc).__name__,
+                exc,
                 exc_info=True,
             )
-            raise err.DatabaseError()
+            raise err.DatabaseError() from exc

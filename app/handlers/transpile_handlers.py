@@ -24,7 +24,8 @@ async def _save_transpilation_result(
     target_language: str,
     result: dict[str, Any],
 ) -> Transpilation:
-    return await history_service.save(
+    logger.info("Saving transpilation result to history")
+    saved = await history_service.save(
         user_id=user_id,
         source_code=source_code,
         source_language=source_language,
@@ -33,6 +34,8 @@ async def _save_transpilation_result(
         validated=result.get("success", False),
         validation_message=result.get("validation_message"),
     )
+    logger.info("Transpilation result saved to history")
+    return saved
 
 
 async def transpile_file(
@@ -42,6 +45,7 @@ async def transpile_file(
     use_cache: bool = Form(True),
     current_user: User = Depends(get_current_user),
 ):
+    logger.info("File transpilation request started")
     ext = Path(file.filename).suffix.lstrip(".")
     source_language = EXTENSION_TO_LANGUAGE.get(ext)
 
@@ -56,13 +60,24 @@ async def transpile_file(
 
     base_name = Path(file.filename).stem
     source_bytes = await file.read()
+    logger.info("Uploaded file read | extension=%s | size_bytes=%s", ext, len(source_bytes))
 
     try:
         source_code = source_bytes.decode("utf-8")
-    except UnicodeDecodeError:
-        logger.error(f"Source file {file.filename} is not valid UTF-8 text.")
+    except UnicodeDecodeError as exc:
+        logger.error(
+            "Uploaded source decode exception | filename=%s | type=%s | message=%s",
+            file.filename,
+            type(exc).__name__,
+            exc,
+        )
         raise err.InvalidFileEncodingError("Uploaded file is not valid UTF-8 text.")
 
+    logger.info(
+        "File input decoded; starting transpilation | source=%s | target=%s",
+        source_language,
+        target_language,
+    )
     result = await transpiler.transpile(
         source_code=source_code,
         source_language=source_language,
@@ -79,6 +94,7 @@ async def transpile_file(
         target_language=target_language,
         result=result,
     )
+    logger.info("File transpilation request completed")
 
     return {
         "success": True,
@@ -98,13 +114,20 @@ async def transpile_raw(
     use_cache: bool = Query(True),
     current_user: User = Depends(get_current_user),
 ):
+    logger.info("Raw-code transpilation request started")
     body = await request.body()
+    logger.info("Raw-code request body received | size_bytes=%s", len(body))
     if len(body) > MAX_CODE_BYTES:
         raise err.TranspilerError("Code is too large.")
 
     try:
         source_code = body.decode("utf-8")
-    except UnicodeDecodeError:
+    except UnicodeDecodeError as exc:
+        logger.error(
+            "Raw-code decode exception | type=%s | message=%s",
+            type(exc).__name__,
+            exc,
+        )
         raise err.InvalidFileEncodingError("Request body is not valid UTF-8 text.")
 
     if not source_code.strip():
@@ -118,6 +141,11 @@ async def transpile_raw(
                 f"Unsupported language: {lang}. Supported: {', '.join(LANGUAGE_EXTENSIONS)}"
             )
 
+    logger.info(
+        "Raw-code input validated; starting transpilation | source=%s | target=%s",
+        source_language,
+        target_language,
+    )
     result = await transpiler.transpile(
         source_code=source_code,
         source_language=source_language,
@@ -134,6 +162,7 @@ async def transpile_raw(
         target_language=target_language,
         result=result,
     )
+    logger.info("Raw-code transpilation request completed")
 
     return PlainTextResponse(
         result["transpiled_code"],

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import bcrypt
 from jose import JWTError, jwt
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.helpers import exceptions as err
@@ -32,78 +33,110 @@ class AuthService:
         return bcrypt.checkpw(pwd_bytes, hash_bytes)
 
     async def register(self, db: AsyncSession, email: str, password: str) -> User:
+        logger.info("Account registration service started")
         email = email.strip().lower()
         try:
+            logger.info("Checking for an existing account")
             existing = await db.execute(select(User).where(User.email == email))
             if existing.scalar_one_or_none():
                 raise err.ConflictError("An account with this email already exists.")
 
+            logger.info("Hashing password for new account")
             user = User(
                 email=email,
                 hashed_password=self._hash_password(password),
                 created_at=datetime.now(timezone.utc),
             )
+            logger.info("Persisting new account")
             db.add(user)
             await db.commit()
             await db.refresh(user)
+            logger.info("Account registration service completed")
             return user
         except err.TranspilerError:
             raise
         except Exception as exc:
             await db.rollback()
-            from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+            from sqlalchemy.exc import IntegrityError
 
             if isinstance(exc, IntegrityError):
                 raise err.ConflictError("An account with this email already exists.")
-            if isinstance(exc, SQLAlchemyError):
-                logger.error(f"Database error during registration: {exc}", exc_info=True)
-                raise err.DatabaseError()
+            if isinstance(exc, (SQLAlchemyError, ConnectionError)):
+                logger.error(
+                    "Database exception during registration | type=%s | message=%s",
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
+                )
+                raise err.DatabaseError() from exc
             raise
 
     async def login(self, db: AsyncSession, email: str, password: str) -> str:
+        logger.info("Login service started")
         email = email.strip().lower()
         try:
+            logger.info("Looking up account for login")
             result = await db.execute(select(User).where(User.email == email))
             user = result.scalar_one_or_none()
 
+            logger.info("Verifying login credentials")
             if not user or not self._verify_password(password, user.hashed_password):
                 raise err.AuthenticationError("Incorrect email or password.")
 
-            return self._create_token(user.id)
+            logger.info("Creating access token")
+            token = self._create_token(user.id)
+            logger.info("Login service completed")
+            return token
         except err.TranspilerError:
             raise
         except Exception as exc:
-            from sqlalchemy.exc import SQLAlchemyError
-
-            if isinstance(exc, SQLAlchemyError):
-                logger.error(f"Database error during login: {exc}", exc_info=True)
-                raise err.DatabaseError()
+            if isinstance(exc, (SQLAlchemyError, ConnectionError)):
+                logger.error(
+                    "Database exception during login | type=%s | message=%s",
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
+                )
+                raise err.DatabaseError() from exc
             raise
 
     async def get_current_user(self, db: AsyncSession, token: str) -> User:
+        logger.info("Current-user lookup started")
         try:
             payload = jwt.decode(token, self.SECRET_KEY, algorithms=[self.ALGORITHM])
             user_id = int(payload["sub"])
-        except JWTError, KeyError, ValueError:
+            logger.info("Access token validated")
+        except (JWTError, KeyError, ValueError) as exc:
+            logger.error(
+                "Access token validation exception | type=%s | message=%s",
+                type(exc).__name__,
+                exc,
+            )
             raise err.AuthenticationError("Invalid or expired token.")
 
         try:
+            logger.info("Looking up authenticated user")
             result = await db.execute(select(User).where(User.id == user_id))
             user = result.scalar_one_or_none()
             if user is None:
                 raise err.AuthenticationError("User no longer exists.")
+            logger.info("Current-user lookup completed")
             return user
         except err.TranspilerError:
             raise
         except Exception as exc:
-            from sqlalchemy.exc import SQLAlchemyError
-
-            if isinstance(exc, SQLAlchemyError):
-                logger.error(f"Database error during get_current_user: {exc}", exc_info=True)
-                raise err.DatabaseError()
+            if isinstance(exc, (SQLAlchemyError, ConnectionError)):
+                logger.error(
+                    "Database exception during current-user lookup | type=%s | message=%s",
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
+                )
+                raise err.DatabaseError() from exc
             raise
 
     def _create_token(self, user_id: int) -> str:
+        logger.info("Creating access token for authenticated user")
         expire = datetime.now(timezone.utc) + timedelta(minutes=self.ACCESS_TOKEN_EXPIRE_MINUTES)
         return jwt.encode(
             {"sub": str(user_id), "exp": expire}, self.SECRET_KEY, algorithm=self.ALGORITHM
