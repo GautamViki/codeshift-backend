@@ -7,12 +7,15 @@ from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.helpers import exceptions as err
+from app.helpers import logger
 from app.models.user import User
-from app.helpers import logger, exceptions as err
 
 
 class AuthService:
-    SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "codeshift-dev-secret-key-change-in-production-long-random-string")
+    SECRET_KEY = os.environ.get(
+        "JWT_SECRET_KEY", "codeshift-dev-secret-key-change-in-production-long-random-string"
+    )
     ALGORITHM = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -49,13 +52,13 @@ class AuthService:
         except Exception as exc:
             await db.rollback()
             from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
             if isinstance(exc, IntegrityError):
                 raise err.ConflictError("An account with this email already exists.")
             if isinstance(exc, SQLAlchemyError):
                 logger.error(f"Database error during registration: {exc}", exc_info=True)
                 raise err.DatabaseError()
             raise
-
 
     async def login(self, db: AsyncSession, email: str, password: str) -> str:
         email = email.strip().lower()
@@ -71,17 +74,17 @@ class AuthService:
             raise
         except Exception as exc:
             from sqlalchemy.exc import SQLAlchemyError
+
             if isinstance(exc, SQLAlchemyError):
                 logger.error(f"Database error during login: {exc}", exc_info=True)
                 raise err.DatabaseError()
             raise
 
-
     async def get_current_user(self, db: AsyncSession, token: str) -> User:
         try:
             payload = jwt.decode(token, self.SECRET_KEY, algorithms=[self.ALGORITHM])
             user_id = int(payload["sub"])
-        except (JWTError, KeyError, ValueError):
+        except JWTError, KeyError, ValueError:
             raise err.AuthenticationError("Invalid or expired token.")
 
         try:
@@ -94,12 +97,14 @@ class AuthService:
             raise
         except Exception as exc:
             from sqlalchemy.exc import SQLAlchemyError
+
             if isinstance(exc, SQLAlchemyError):
                 logger.error(f"Database error during get_current_user: {exc}", exc_info=True)
                 raise err.DatabaseError()
             raise
 
-
     def _create_token(self, user_id: int) -> str:
         expire = datetime.now(timezone.utc) + timedelta(minutes=self.ACCESS_TOKEN_EXPIRE_MINUTES)
-        return jwt.encode({"sub": str(user_id), "exp": expire}, self.SECRET_KEY, algorithm=self.ALGORITHM)
+        return jwt.encode(
+            {"sub": str(user_id), "exp": expire}, self.SECRET_KEY, algorithm=self.ALGORITHM
+        )

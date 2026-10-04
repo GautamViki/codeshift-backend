@@ -1,16 +1,39 @@
 from pathlib import Path
+from typing import Any
+
+from fastapi import Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse
-from fastapi import UploadFile, File, Form, Request, Query, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.helpers import LANGUAGE_EXTENSIONS, MAX_CODE_BYTES, logger, exceptions as err
-from app.services.transpiler import CodeTranspilerService
+
 from app.dependencies import get_current_user
-from app.database import get_db
-from app.models.user import User
+from app.helpers import LANGUAGE_EXTENSIONS, MAX_CODE_BYTES, logger
+from app.helpers import exceptions as err
 from app.models.transpilation import Transpilation
+from app.models.user import User
+from app.services.history import TranspilationHistoryService
+from app.services.transpiler import CodeTranspilerService
 
 transpiler = CodeTranspilerService()
+history_service = TranspilationHistoryService()
 EXTENSION_TO_LANGUAGE = {ext: lang for lang, ext in LANGUAGE_EXTENSIONS.items()}
+
+
+async def _save_transpilation_result(
+    user_id: int,
+    source_code: str,
+    source_language: str,
+    target_language: str,
+    result: dict[str, Any],
+) -> Transpilation:
+    return await history_service.save(
+        user_id=user_id,
+        source_code=source_code,
+        source_language=source_language,
+        target_language=target_language,
+        transpiled_code=result["transpiled_code"],
+        validated=result.get("success", False),
+        validation_message=result.get("validation_message"),
+    )
+
 
 async def transpile_file(
     file: UploadFile = File(...),
@@ -18,7 +41,6 @@ async def transpile_file(
     validate_syntax: bool = Form(True),
     use_cache: bool = Form(True),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     ext = Path(file.filename).suffix.lstrip(".")
     source_language = EXTENSION_TO_LANGUAGE.get(ext)
@@ -50,15 +72,12 @@ async def transpile_file(
         use_cache=use_cache,
     )
 
-    saved = await Transpilation.save_transpilation(
-        db=db,
+    saved = await _save_transpilation_result(
         user_id=current_user.id,
         source_code=source_code,
         source_language=source_language,
         target_language=target_language,
-        transpiled_code=result["transpiled_code"],
-        validated=result.get("success", False),
-        validation_message=result.get("validation_message"),
+        result=result,
     )
 
     return {
@@ -69,6 +88,7 @@ async def transpile_file(
         "validation_message": result.get("validation_message"),
         "cached": result.get("cached", False),
     }
+
 
 async def transpile_raw(
     request: Request,
@@ -107,14 +127,12 @@ async def transpile_raw(
         use_cache=use_cache,
     )
 
-    await Transpilation.save_transpilation(
+    await _save_transpilation_result(
         user_id=current_user.id,
         source_code=source_code,
         source_language=source_language,
         target_language=target_language,
-        transpiled_code=result["transpiled_code"],
-        validated=result.get("success", False),
-        validation_message=result.get("validation_message"),
+        result=result,
     )
 
     return PlainTextResponse(

@@ -1,7 +1,7 @@
 import unittest
 
-from app.eval.metrics import summarize
 from app.eval.cases import EVAL_CASES
+from app.eval.metrics import summarize
 
 
 class DummyResult:

@@ -1,11 +1,12 @@
 import logging
-import warnings
 import os
-from pathlib import Path
-from logging.handlers import WatchedFileHandler
-from starlette.responses import Response
-from fastapi import Request
+import warnings
 from http import HTTPStatus
+from logging.handlers import WatchedFileHandler
+from pathlib import Path
+
+from fastapi import Request
+from starlette.responses import Response
 
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
@@ -23,28 +24,29 @@ class AppLogger:
     def setup_logger(self, name: str = "transpiler") -> logging.Logger:
         logger = logging.getLogger(name)
 
-        if logger.handlers:  # avoid duplicate helpers on reload
+        if logger.handlers:  # avoid duplicate handlers on reload
             return logger
 
         logger.setLevel(logging.DEBUG)
+        logger.propagate = False
 
         formatter = logging.Formatter(
             "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
 
-        # Only write to file (and echo to console) in local/dev
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+
         if os.getenv("ENVIRONMENT", "development") == "development":
             file_handler = WatchedFileHandler(LOG_FILE, mode="a", encoding="utf-8")
             file_handler.setLevel(logging.DEBUG)
             file_handler.setFormatter(formatter)
             logger.addHandler(file_handler)
 
-            console_handler = logging.StreamHandler()
-            console_handler.setFormatter(formatter)
-
         return logger
-
 
     async def log_requests(self, request: Request, call_next):
         self.logger.info(f"Incoming request: {request.method} {request.url.path}")
@@ -60,7 +62,9 @@ class AppLogger:
             except Exception:
                 body_text = "<non-utf8 body>"
 
-            self.logger.info(f"Response status: {response.status_code} for {request.url.path} | detail: {body_text}")
+            self.logger.info(
+                f"Response status: {response.status_code} for {request.url.path} | detail: {body_text}"
+            )
 
             return Response(
                 content=body_bytes,
@@ -93,5 +97,6 @@ class AppLogger:
 
     def debug(self, msg: str, *args, **kwargs):
         self.logger.debug(msg, *args, **kwargs)
+
 
 logger = AppLogger()

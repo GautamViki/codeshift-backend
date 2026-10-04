@@ -1,8 +1,10 @@
 import logging
+
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 logger = logging.getLogger(__name__)
+
 
 def get_aws_secret(secret_name: str, region_name: str = "us-east-1") -> str | None:
     """

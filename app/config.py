@@ -1,7 +1,9 @@
-import os
 import logging
+import os
 from pathlib import Path
+
 from dotenv import load_dotenv
+
 from app.aws_configs.secret_manager import get_aws_secret
 
 logger = logging.getLogger(__name__)
@@ -15,6 +17,7 @@ if env_file.exists():
     load_dotenv(env_file)
 else:
     load_dotenv(BASE_DIR / ".env")  # fallback
+
 
 class Config:
     ENVIRONMENT = ENV

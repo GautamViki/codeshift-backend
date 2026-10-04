@@ -1,6 +1,9 @@
-from app.helpers.logger import logger
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+
+from app.helpers.logger import logger
+
 
 async def on_startup():
     logger.info("=" * 50)

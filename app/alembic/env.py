@@ -2,9 +2,9 @@ import os
 import sys
 from logging.config import fileConfig
 
+from alembic import context
 from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool, text
-from alembic import context
 
 # 1. Resolve project root directory dynamically
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -18,7 +18,7 @@ if os.path.exists(env_path):
 else:
     load_dotenv()
 
-from app.models import Base
+from app.models import Base  # noqa: E402
 
 config = context.config
 
@@ -42,7 +42,9 @@ def on_version_apply(ctx, step, heads, run_args):
         doc = (step.revision_map.get_revision(step.up_revision_id).doc or "").replace("'", "''")
         conn = ctx.connection
         conn.execute(
-            text(f"UPDATE alembic_version SET description = '{doc}' WHERE version_num = '{step.up_revision_id}';")
+            text(
+                f"UPDATE alembic_version SET description = '{doc}' WHERE version_num = '{step.up_revision_id}';"
+            )
         )
 
 
@@ -82,7 +84,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            on_version_apply=on_version_apply
+            on_version_apply=on_version_apply,
         )
 
         # 3. Run migrations and commit transaction

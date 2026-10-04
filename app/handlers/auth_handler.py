@@ -1,10 +1,11 @@
 import re
+
 from fastapi import Depends, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.services.auth import AuthService
 from app.helpers import exceptions
+from app.services.auth import AuthService
 
 auth_service = AuthService()
 

@@ -113,7 +113,7 @@ class EvalRunner:
 
         final_code = generated_code.rstrip() + "\n" + wrapper
         if "fmt." in wrapper and '"fmt"' not in generated_code:
-            final_code = final_code.replace("package main\n", "package main\nimport \"fmt\"\n", 1)
+            final_code = final_code.replace("package main\n", 'package main\nimport "fmt"\n', 1)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             file_path = os.path.join(tmpdir, "main.go")

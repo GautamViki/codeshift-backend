@@ -4,7 +4,6 @@ import os
 import re
 import shutil
 import tempfile
-
 from typing import Set, Tuple
 
 from app.validators.base_validator import BaseCodeValidator, ValidationResult
@@ -28,7 +27,9 @@ class GoValidator(BaseCodeValidator):
 
             rc, out = await self.runner.run(*cmd, cwd=tmpdir)
             if rc != 0:
-                return ValidationResult(False, f"{step} Error: {self._clean_output(out, tmpdir)}", code)
+                return ValidationResult(
+                    False, f"{step} Error: {self._clean_output(out, tmpdir)}", code
+                )
             code = self._read_file(path)
 
             # 2. Vet loop with automated import stripping passes
@@ -64,16 +65,6 @@ class GoValidator(BaseCodeValidator):
             kept.append(line)
         return "\n".join(kept) + "\n", changed
 
-    @staticmethod
-    def _write_file(path: str, content: str) -> None:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-
-    @staticmethod
-    def _read_file(path: str) -> str:
-        with open(path, encoding="utf-8") as f:
-            return f.read()
-
 
 class PythonValidator(BaseCodeValidator):
     """Encapsulates Python syntax checking, AST import cleaning, and formatting."""
@@ -108,10 +99,14 @@ class PythonValidator(BaseCodeValidator):
                 if shutil.which("ruff"):
                     rc, out = await self.runner.run("ruff", "check", "main.py", cwd=tmpdir)
                 else:
-                    rc, out = await self.runner.run("python", "-m", "py_compile", "main.py", cwd=tmpdir)
+                    rc, out = await self.runner.run(
+                        "python", "-m", "py_compile", "main.py", cwd=tmpdir
+                    )
 
                 if rc == 0:
-                    return ValidationResult(True, "Code passed Python syntax and lint checks.", code)
+                    return ValidationResult(
+                        True, "Code passed Python syntax and lint checks.", code
+                    )
 
                 if not fix_imports or attempt == self.max_fix_passes:
                     break
@@ -119,7 +114,9 @@ class PythonValidator(BaseCodeValidator):
                 # Apply import fix
                 changed = False
                 if shutil.which("ruff"):
-                    await self.runner.run("ruff", "check", "--select", "F401", "--fix", "main.py", cwd=tmpdir)
+                    await self.runner.run(
+                        "ruff", "check", "--select", "F401", "--fix", "main.py", cwd=tmpdir
+                    )
                     new_code = self._read_file(path)
                     changed = new_code != code
                     code = new_code
@@ -131,7 +128,9 @@ class PythonValidator(BaseCodeValidator):
                 if not changed:
                     break
 
-            return ValidationResult(False, f"Python Lint Error:\n{self._clean_output(out, tmpdir)}", code)
+            return ValidationResult(
+                False, f"Python Lint Error:\n{self._clean_output(out, tmpdir)}", code
+            )
 
     def _remove_unused_imports_ast(self, code: str, unused_imports: Set[str]) -> Tuple[str, bool]:
         if not unused_imports:
@@ -156,7 +155,11 @@ class PythonValidator(BaseCodeValidator):
                 names = [n for n in node.names if (n.asname or n.name) not in unused_imports]
                 if len(names) != len(node.names):
                     self.changed = True
-                return ast.ImportFrom(module=node.module, names=names, level=node.level) if names else None
+                return (
+                    ast.ImportFrom(module=node.module, names=names, level=node.level)
+                    if names
+                    else None
+                )
 
         cleaner = ImportCleaner()
         new_tree = cleaner.visit(tree)
@@ -164,16 +167,6 @@ class PythonValidator(BaseCodeValidator):
             ast.fix_missing_locations(new_tree)
             return ast.unparse(new_tree), True
         return code, False
-
-    @staticmethod
-    def _write_file(path: str, content: str) -> None:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-
-    @staticmethod
-    def _read_file(path: str) -> str:
-        with open(path, encoding="utf-8") as f:
-            return f.read()
 
 
 class ValidationFactory:

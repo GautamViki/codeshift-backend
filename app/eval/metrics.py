@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Sequence
 
 
 @dataclass
@@ -24,5 +24,9 @@ def summarize(results: Sequence[object]) -> EvalSummary:
         failed=failed,
         pass_rate=(passed / total) if total else 0.0,
         prompt_version=getattr(results[0], "prompt_version", "unknown") if results else "unknown",
-        failures=[getattr(result, "case_id", "unknown") for result in results if not getattr(result, "passed", False)],
+        failures=[
+            getattr(result, "case_id", "unknown")
+            for result in results
+            if not getattr(result, "passed", False)
+        ],
     )

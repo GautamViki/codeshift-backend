@@ -1,10 +1,9 @@
-from fastapi import Request
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.helpers.logger import logger
-from fastapi.exceptions import RequestValidationError
-from starlette.exceptions import HTTPException as StarletteHTTPException
-from fastapi import FastAPI
 
 
 class TranspilerError(Exception):
@@ -30,6 +29,7 @@ class TranspilerError(Exception):
 
 # ---- Input errors ----
 
+
 class InvalidPythonSyntaxError(TranspilerError):
     status_code = 400
     app_code = 1001
@@ -52,6 +52,7 @@ class InvalidFileEncodingError(TranspilerError):
 
 
 # ---- LLM / provider errors ----
+
 
 class LLMProviderError(TranspilerError):
     status_code = 502
@@ -97,6 +98,7 @@ class EmptyLLMResponseError(TranspilerError):
 
 # ---- Output validation errors ----
 
+
 class GoValidationError(TranspilerError):
     status_code = 422
     app_code = 3001
@@ -112,6 +114,7 @@ class GoToolingUnavailableError(TranspilerError):
 
 
 # ---- File system errors ----
+
 
 class FileWriteError(TranspilerError):
     status_code = 500
@@ -135,6 +138,7 @@ class ValidationToolUnavailableError(TranspilerError):
 
 
 # ---- Auth, Database & Resource errors ----
+
 
 class AuthenticationError(TranspilerError):
     status_code = 401
@@ -184,14 +188,9 @@ class ExceptionHandler:
             f"from {request.client.host if request.client else 'unknown'}: {exc}",
             exc_info=True,
         )
-        return JSONResponse(
-            status_code=503,
-            content={
-                "success": False,
-                "code": 5001,
-                "error_type": "DATABASE_ERROR",
-                "message": f"Database is temporarily unavailable. Please try again later.",
-            },
+        return await self.transpiler_exception(
+            request,
+            DatabaseError("Database is temporarily unavailable. Please try again later."),
         )
 
     async def unhandled_exception(self, request: Request, exc: Exception):

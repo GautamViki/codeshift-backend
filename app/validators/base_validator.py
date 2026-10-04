@@ -1,10 +1,10 @@
 # app/validators/base_validator.py
+import asyncio
 import os
 from abc import ABC, abstractmethod
 from asyncio.subprocess import PIPE
 from dataclasses import dataclass
-import asyncio
-from typing import Optional, Tuple
+from typing import Optional
 
 
 @dataclass
@@ -18,7 +18,9 @@ class ProcessRunner:
     """Encapsulates subprocess execution and timeouts."""
 
     @staticmethod
-    async def run(*cmd: str, cwd: str, timeout: float = 30.0) -> tuple[int, str] | tuple[int | None, str]:
+    async def run(
+        *cmd: str, cwd: str, timeout: float = 30.0
+    ) -> tuple[int, str] | tuple[int | None, str]:
         proc = await asyncio.create_subprocess_exec(*cmd, cwd=cwd, stdout=PIPE, stderr=PIPE)
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -46,3 +48,13 @@ class BaseCodeValidator(ABC):
         message = message.replace(tmpdir + os.sep, "").replace(tmpdir, "")
         lines = [ln for ln in message.splitlines() if ln.strip() and not ln.startswith("#")]
         return "\n".join(lines)
+
+    @staticmethod
+    def _write_file(path: str, content: str) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    @staticmethod
+    def _read_file(path: str) -> str:
+        with open(path, encoding="utf-8") as f:
+            return f.read()

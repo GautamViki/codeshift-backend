@@ -1,36 +1,37 @@
 # app/services/transpiler.py
 import asyncio
-from datetime import datetime
 import inspect
 import re
+from datetime import datetime
+
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 
+from app.config import config
+from app.eval.cases import EVAL_CASES
+from app.eval.metrics import summarize
+from app.eval.runner import EvalRunner
+from app.helpers.cache import transpile_cache
+from app.helpers.constants import (
+    GEMINI_MODEL_NAME,
+    GEMINI_TEMPERATURE,
+    THINKING_BUDGET,
+)
 from app.helpers.exceptions import (
     CodeValidationError,
     EmptyLLMResponseError,
     FileWriteError,
     ValidationToolUnavailableError,
 )
-from app.config import config
-from app.eval.cases import EVAL_CASES
-from app.eval.metrics import summarize
-from app.eval.runner import EvalRunner
-from app.services.file_writer import save_generated_code
+from app.helpers.logger import logger
 from app.helpers.utils import (
     get_extension,
     get_start_marker,
     get_validator,
     handle_llm_error,
 )
-from app.helpers.cache import transpile_cache
-from app.helpers.logger import logger
-from app.helpers.constants import (
-    GEMINI_MODEL_NAME,
-    GEMINI_TEMPERATURE,
-    THINKING_BUDGET,
-)
+from app.services.file_writer import save_generated_code
 
 MAX_REPAIR_ATTEMPTS = 2
 
@@ -54,7 +55,7 @@ def extract_code(raw_text: str, target_language: str) -> str:
     if marker:
         match = re.search(marker, text, flags=re.MULTILINE)
         if match:
-            text = text[match.start():]
+            text = text[match.start() :]
 
     # 3. Anything left that starts a fence is the closing fence (and trailing chatter): cut it.
     text = re.sub(r"\n?```.*$", "", text, flags=re.DOTALL).strip()
@@ -77,25 +78,27 @@ class CodeTranspilerService:
         )
 
     def _get_prompt(self, source_language: str, target_language: str) -> ChatPromptTemplate:
-        return ChatPromptTemplate.from_messages([
-            (
-                "system",
-                f"You are an expert compiler engineer. Translate {source_language} code to idiomatic {target_language} code.\n"
-                "IMPORTANT RULES:\n"
-                f"1. Output ONLY {target_language} code — no markdown code blocks, no backticks.\n"
-                "2. Do NOT add introductory or concluding text.\n"
-                "3. Preserve the behavior and structure of the source exactly. Translate only what is present: "
-                "do NOT add input validation, type checks, extra error handling, logging, comments or new features.\n"
-                "4. If the source already has error handling, translate it into the target language's conventions "
-                "(for example, exceptions to returned errors).\n"
-                "5. Include only the imports the code actually uses.\n"
-                "6. The code must compile: no unused imports and no unused local variables "
-                "(assign intentionally ignored values to `_` where the language allows it).\n"
-                f"7. Use only the {target_language} standard library. Do not import third-party packages "
-                "unless the source code clearly depends on them.",
-            ),
-            ("user", "{code}"),
-        ])
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    f"You are an expert compiler engineer. Translate {source_language} code to idiomatic {target_language} code.\n"
+                    "IMPORTANT RULES:\n"
+                    f"1. Output ONLY {target_language} code — no markdown code blocks, no backticks.\n"
+                    "2. Do NOT add introductory or concluding text.\n"
+                    "3. Preserve the behavior and structure of the source exactly. Translate only what is present: "
+                    "do NOT add input validation, type checks, extra error handling, logging, comments or new features.\n"
+                    "4. If the source already has error handling, translate it into the target language's conventions "
+                    "(for example, exceptions to returned errors).\n"
+                    "5. Include only the imports the code actually uses.\n"
+                    "6. The code must compile: no unused imports and no unused local variables "
+                    "(assign intentionally ignored values to `_` where the language allows it).\n"
+                    f"7. Use only the {target_language} standard library. Do not import third-party packages "
+                    "unless the source code clearly depends on them.",
+                ),
+                ("user", "{code}"),
+            ]
+        )
 
     def _normalize_validation(self, outcome, original_code: str) -> tuple[bool, str, str]:
         """
@@ -125,7 +128,9 @@ class CodeTranspilerService:
         if use_cache:
             cached_result = transpile_cache.get(cache_key)
             if cached_result:
-                logger.info(f"Cache HIT for {source_language} -> {target_language} (key: {cache_key[:8]})")
+                logger.info(
+                    f"Cache HIT for {source_language} -> {target_language} (key: {cache_key[:8]})"
+                )
                 return {**cached_result, "cached": True}
 
         if not base_name:
@@ -147,15 +152,20 @@ class CodeTranspilerService:
 
         generated_code = extract_code(raw_output, target_language)
         if not generated_code:
-            raise EmptyLLMResponseError(f"Model response did not contain any {target_language} code.")
+            raise EmptyLLMResponseError(
+                f"Model response did not contain any {target_language} code."
+            )
 
         is_valid, message, repair_attempts = True, f"Validation skipped for {target_language}.", 0
         if should_validate:
             validator = get_validator(target_language)
             if validator:
-                is_valid, message, generated_code, repair_attempts = await self._validate_with_repair(
-                    validator, generated_code, target_language
-                )
+                (
+                    is_valid,
+                    message,
+                    generated_code,
+                    repair_attempts,
+                ) = await self._validate_with_repair(validator, generated_code, target_language)
                 if not is_valid:
                     raise CodeValidationError(message, transpiled_code=generated_code)
             else:
@@ -242,18 +252,20 @@ class CodeTranspilerService:
         return is_valid, message, validated_code
 
     async def _repair_code(self, code: str, error: str, target_language: str) -> str:
-        prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "You are an expert {target_language} engineer. The code below failed compiler validation.\n"
-                "RULES:\n"
-                "1. Return the COMPLETE corrected file.\n"
-                "2. Fix only what the error reports; do not change behavior.\n"
-                "3. Use only the {target_language} standard library; do not add third-party imports.\n"
-                "4. Output ONLY code, with no markdown code blocks and no explanations.",
-            ),
-            ("user", "Validation error:\n{error}\n\nCode:\n{code}"),
-        ])
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are an expert {target_language} engineer. The code below failed compiler validation.\n"
+                    "RULES:\n"
+                    "1. Return the COMPLETE corrected file.\n"
+                    "2. Fix only what the error reports; do not change behavior.\n"
+                    "3. Use only the {target_language} standard library; do not add third-party imports.\n"
+                    "4. Output ONLY code, with no markdown code blocks and no explanations.",
+                ),
+                ("user", "Validation error:\n{error}\n\nCode:\n{code}"),
+            ]
+        )
         try:
             response = await (prompt | self.llm).ainvoke(
                 {"target_language": target_language, "error": error, "code": code}
@@ -286,6 +298,8 @@ class CodeTranspilerService:
                 logger.warning(f"{target_language} repair returned unchanged code; stopping.")
                 break
             repairs = attempt
-            is_valid, message, code = await self._run_validator(validator, repaired, target_language)
+            is_valid, message, code = await self._run_validator(
+                validator, repaired, target_language
+            )
 
         return is_valid, message, code, repairs

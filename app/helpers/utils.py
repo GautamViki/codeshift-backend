@@ -1,8 +1,9 @@
-import re
-from app.helpers.exceptions import LLMProviderError
-from app.helpers.constants import LANGUAGE_EXTENSIONS, LANGUAGE_START_MARKERS, GOOGLE_ERROR_MAP
-from app.validators.code_validator import ValidationFactory
 import hashlib
+import re
+
+from app.helpers.constants import GOOGLE_ERROR_MAP, LANGUAGE_EXTENSIONS, LANGUAGE_START_MARKERS
+from app.helpers.exceptions import LLMProviderError
+from app.validators.code_validator import ValidationFactory
 
 
 def extract_clean_message(exc: Exception, fallback: str) -> str:
@@ -21,7 +22,9 @@ def extract_clean_message(exc: Exception, fallback: str) -> str:
     match = re.search(r'"message":\s*"([^"\\]*(?:\\.[^"\\]*)*)"', text)
     if match:
         try:
-            clean = match.group(1).replace("\\\\n", "\n").replace("\\n", "\n").split("\n")[0].strip()
+            clean = (
+                match.group(1).replace("\\\\n", "\n").replace("\\n", "\n").split("\n")[0].strip()
+            )
             if clean:
                 return clean
         except Exception:
@@ -38,6 +41,7 @@ def handle_llm_error(exc: Exception, source_language: str, target_language: str)
             log_fn(f"{log_prefix} ({source_language}->{target_language}): {exc}")
             raise mapped_exc(extract_clean_message(exc, str(exc))) from exc
     raise LLMProviderError(str(exc)) from exc
+
 
 def get_extension(language: str) -> str:
     return LANGUAGE_EXTENSIONS.get(language.lower(), "txt")

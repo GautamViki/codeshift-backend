@@ -1,9 +1,16 @@
 from langchain_google_genai.chat_models import (
-    GoogleRateLimitError, GoogleAuthenticationError,
-    GooglePermissionDeniedError, ChatGoogleGenerativeAIError,
+    ChatGoogleGenerativeAIError,
+    GoogleAuthenticationError,
+    GooglePermissionDeniedError,
+    GoogleRateLimitError,
 )
 
-from app.helpers.exceptions import RateLimitExceededError, PermissionDeniedError, InvalidApiKeyError, LLMProviderError
+from app.helpers.exceptions import (
+    InvalidApiKeyError,
+    LLMProviderError,
+    PermissionDeniedError,
+    RateLimitExceededError,
+)
 from app.helpers.logger import logger
 
 # Gemini model configuration
@@ -32,9 +39,9 @@ LANGUAGE_EXTENSIONS = {
 }
 
 LANGUAGE_START_MARKERS = {
-    "go": r'\bpackage\s+\w+',
-    "java": r'\b(public\s+)?class\s+\w+',
-    "python": r'^(import|from|def|class)\s',
+    "go": r"\bpackage\s+\w+",
+    "java": r"\b(public\s+)?class\s+\w+",
+    "python": r"^(import|from|def|class)\s",
     # languages without a strong marker fall back to no trimming
 }
 
