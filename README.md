@@ -1,134 +1,114 @@
-# Polyglot Refactor Engine ⚡
+# CodeShift Backend
 
-An AI-powered neural source-to-source code transpiler and modernization API that converts Python code into idiomatic Go. 
+This project is a FastAPI backend for AI-assisted code transpilation. It allows authenticated users to submit source code or uploaded files, translate them into a target language with Gemini, validate the output, store results, and keep a history of past transpilation requests.
 
-Built using a **Compound Generative AI System architecture**, this project combines foundation models (**Google Gemini** via **LangChain**) with deterministic compiler guardrails (**LibCST**, **`go fmt`**, and **`go vet`**) to ensure generated code is not only idiomatic but also syntactically correct and compilable.
+## What the project does
 
----
+- Registers and authenticates users with email/password and JWT tokens
+- Accepts raw code or uploaded source files
+- Detects the source language from the file extension or request parameters
+- Uses LangChain + Google Gemini to generate target-language code
+- Cleans the LLM output and strips markdown fences or surrounding text
+- Validates generated code using language-specific validators
+- Retries a small repair loop when validation fails
+- Saves generated code to disk and stores metadata in PostgreSQL/SQLAlchemy models
+- Reuses cached transpilation results for repeated inputs
 
-## 🌟 Key Features
+## Current architecture
 
-* **LLM-Driven Transpilation:** Leverages Google Gemini (`gemini-3.6-flash`) with prompt engineering tailored for idiomatic Go conventions, proper pointer semantics, explicit error handling (`if err != nil`), and type definitions.
-* **Input Syntax Verification:** Validates input Python source code before invoking the LLM using Concrete Syntax Trees (`libcst`).
-* **Compiler-in-the-Loop Validation:** Automatically validates generated Go code against real Go toolchains (`go fmt` and `go vet`).
-* **Dual Ingestion Endpoints:**
-  * **Raw Code Transpilation:** Direct JSON payloads for code snippets.
-  * **File Upload Transpilation:** Multipart `.py` file uploads with deterministic `.go` file persistence in `generated_code/`.
-* **Extensible Architecture:** Pre-structured directories for Retrieval-Augmented Generation (RAG) and Tree-sitter AST parsing.
+### App entry points
 
----
+- [app/main.py](app/main.py): creates the FastAPI app, CORS config, exception handlers, and includes the API router
+- [app/api/url_def.py](app/api/url_def.py): declares all routes
 
-## 🏗️ Architecture & Workflow
+### Core layers
 
-```mermaid
-flowchart TD
-    A[Input Python Code / File] --> B[FastAPI Endpoint]
-    B --> C[LibCST: Syntax Validation]
-    C -->|Invalid Syntax| D[Return 400 Bad Request]
-    C -->|Valid Syntax| E[LangChain Prompt Chain]
-    E --> F[Google Gemini Flash LLM]
-    F --> G[Extract & Clean Go Code]
-    G --> H[Go Toolchain: go fmt & go vet]
-    H -->|Fails Compiler Checks| I[Return Compiler Errors]
-    H -->|Passes Compiler Checks| J[Save to generated_code/]
-    J --> K[Return Transpiled Go Code & Status]
+- [app/handlers](app/handlers): handles HTTP requests for auth, transpilation, and history
+- [app/services](app/services): contains the business logic for auth, transpilation, and history
+- [app/models](app/models): ORM models for users and transpilation records
+- [app/validators](app/validators): validation rules for generated code
+- [app/helpers](app/helpers): constants, logging, cache, exceptions, utilities
+- [app/database.py](app/database.py): SQLAlchemy async database setup
+- [app/dependencies.py](app/dependencies.py): auth dependency for protected routes
+
+## Supported languages
+
+The code currently defines these languages in [app/helpers/constants.py](app/helpers/constants.py):
+
+- Python
+- Go
+- JavaScript
+- TypeScript
+- Java
+- Rust
+
+Validation is currently implemented for:
+
+- Python
+- Go
+
+## Security and data flow
+
+The app uses:
+
+- JWT-based authentication via `OAuth2PasswordBearer`
+- bcrypt password hashing in [app/services/auth.py](app/services/auth.py)
+- Async SQLAlchemy sessions for the database layer
+- a hash-based cache key for repeated transpilation requests
+
+## Prerequisites
+
+Before running the backend, you need:
+
+- Python 3.14+ (from [pyproject.toml](pyproject.toml))
+- PostgreSQL running and available via `DB_URL`
+- Go installed and available in `PATH` for Go validation checks
+- A Google Gemini API key
+
+## Environment variables
+
+Create a `.env` or `.env.development` file with values like:
+
+```env
+ENVIRONMENT=development
+DB_URL=postgresql+asyncpg://user:password@localhost:5432/codeshift
+GOOGLE_API_KEY=your_gemini_api_key
+JWT_SECRET_KEY=change_this_in_production
 ```
 
----
+The app loads environment files automatically from [app/config.py](app/config.py). If `ENVIRONMENT=development`, it tries to load `.env.development` first, then falls back to `.env`.
 
-## 📂 Project Structure
+## Local setup
 
-```text
-code-transpiler-ai/
-├── app/
-│   ├── config.py              # Environment configuration & API keys
-│   ├── main.py                # FastAPI endpoints & application routing
-│   ├── parsers/               # Code parsing utilities (Tree-sitter / AST)
-│   ├── rag/                   # Retrieval-Augmented Generation modules
-│   ├── services/
-│   │   ├── file_writer.py     # Deterministic disk persistence for generated files
-│   │   └── transpiler.py      # Core LLM prompt chain & transpilation pipeline
-│   └── validators/
-│       └── go_validator.py    # Compiler guardrails running `go fmt` & `go vet`
-├── generated_code/            # Output folder for verified transpiled .go files
-├── requirements.txt           # Python dependencies
-├── .env.development           # Local environment configuration
-└── README.md
-```
-
----
-
-## 📋 Prerequisites
-
-Before running the service, make sure you have:
-
-1. **Python 3.10+**
-2. **Go (1.18+)**: The Go compiler must be installed and accessible in your system `PATH` (used by `go fmt` and `go vet`).
-   ```bash
-   go version
-   ```
-3. **Google Gemini API Key**: Obtain an API key from [Google AI Studio](https://aistudio.google.com/).
-
----
-
-## 🚀 Getting Started
-
-### 1. Clone the Repository
+### 1. Install dependencies
 
 ```bash
-git clone https://github.com/GautamViki/code-transpiler-ai.git
-cd code-transpiler-ai
-```
-
-### 2. Set Up Virtual Environment
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate   # On Windows: .venv\Scripts\activate
-```
-
-### 3. Install Dependencies
-
-```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Configure Environment Variables
-
-Add your Google Gemini API key inside `.env.development`:
-
-```env
-GOOGLE_API_KEY=your_gemini_api_key_here
-ENVIRONMENT=development
-```
-*(Note: `app/config.py` automatically loads `.env.development` by default when `ENVIRONMENT=development`).*
-
-### 5. Start the Server
-
-Run the development server using `uvicorn`:
+### 2. Start the app
 
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Once running, interactive API docs are available at:
-* **Swagger UI:** [http://localhost:8000/docs](http://localhost:8000/docs)
-* **ReDoc:** [http://localhost:8000/redoc](http://localhost:8000/redoc)
+### 3. Open API docs
 
----
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
 
-## 📡 API Reference
+## API endpoints
 
-### Health Check
-`GET /`
-
-Returns the service status.
+### Health check
 
 ```bash
-curl -X GET http://localhost:8000/
+curl http://localhost:8000/
 ```
 
-**Response:**
+Response:
+
 ```json
 {
   "status": "running",
@@ -136,72 +116,165 @@ curl -X GET http://localhost:8000/
 }
 ```
 
----
+### Register a user
 
-### Transpile Code Snippet
-`POST /api/v1/transpile`
+`POST /api/v1/auth/register`
 
-Transpiles a raw Python string into Go.
+Uses form data:
 
-**Request Body:**
-```json
-{
-  "source_code": "def add(a: int, b: int) -> int:\n    return a + b",
-  "source_language": "python",
-  "target_language": "go"
-}
-```
-
-**Example Request:**
 ```bash
-curl -X POST http://localhost:8000/api/v1/transpile \
-  -H "Content-Type: application/json" \
-  -d '{
-    "source_code": "def add(a: int, b: int) -> int:\n    return a + b",
-    "source_language": "python",
-    "target_language": "go"
-  }'
+curl -X POST http://localhost:8000/api/v1/auth/register \
+  -F "email=user@example.com" \
+  -F "password=secret123"
 ```
 
-**Response:**
+Example response:
+
 ```json
 {
-  "success": true,
-  "filename": "transpiled_2026Aug13_01h_27m_04s.go",
-  "saved_path": "generated_code/transpiled_2026Aug13_01h_27m_04s.go",
-  "validation_message": "Code passed Go compiler syntax checks."
+  "id": 1,
+  "email": "user@example.com"
 }
 ```
 
----
+### Login
 
-### Transpile File Upload
+`POST /api/v1/auth/login`
+
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/login \
+  -F "email=user@example.com" \
+  -F "password=secret123"
+```
+
+Example response:
+
+```json
+{
+  "access_token": "<jwt-token>",
+  "token_type": "bearer"
+}
+```
+
+### Transpile a file
+
 `POST /api/v1/transpile-file`
 
-Uploads a `.py` file, transpiles it to Go, runs compiler validations, and persists the generated file under `generated_code/<filename>.go`.
+Requires Bearer token auth. Upload a file and pass the target language.
 
-**Example Request:**
 ```bash
 curl -X POST http://localhost:8000/api/v1/transpile-file \
-  -F "file=@path/to/script.py"
+  -H "Authorization: Bearer <token>" \
+  -F "file=@example.py" \
+  -F "target_language=go" \
+  -F "validate_syntax=true" \
+  -F "use_cache=true"
 ```
 
-**Response:**
+Example response:
+
 ```json
 {
   "success": true,
-  "filename": "script.go",
-  "saved_path": "generated_code/script.go",
-  "validation_message": "Code passed Go compiler syntax checks."
+  "transpilation_id": 12,
+  "filename": "example.go",
+  "saved_path": "generated_code/example.go",
+  "validation_message": "Code passed Go compiler syntax checks.",
+  "cached": false
 }
 ```
 
----
+### Transpile raw source text
 
-## 🔮 Roadmap
+`POST /api/v1/transpile-raw`
 
-- [ ] **RAG-Assisted Idiomatic Idioms:** Index Go standard library packages and design patterns with ChromaDB to guide code generation.
-- [ ] **Multi-File / Module Transpilation:** Support packaging whole Python modules into Go packages with `go.mod` creation.
-- [ ] **Additional Language Pairs:** Expand support for Go-to-Python and Python-to-Rust transpilation.
-- [ ] **Automated Unit Test Generation:** Generate corresponding `_test.go` suites along with the transpiled implementation.
+Requires Bearer token auth. The request body is plain text, and language parameters are passed as query params.
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/transpile-raw?source_language=python&target_language=go&validate_syntax=true&use_cache=true" \
+  -H "Authorization: Bearer <token>" \
+  --data-binary $'def add(a, b):\n    return a + b\n'
+```
+
+Response is plain text containing the transpiled output.
+
+### Fetch transpilation history
+
+`GET /api/v1/history`
+
+```bash
+curl "http://localhost:8000/api/v1/history?limit=20&offset=0" \
+  -H "Authorization: Bearer <token>"
+```
+
+Example response:
+
+```json
+[
+  {
+    "id": 12,
+    "source_language": "python",
+    "target_language": "go",
+    "created_at": "2026-10-04T10:20:00Z"
+  }
+]
+```
+
+## Transpilation flow
+
+A single transpile request follows this flow:
+
+1. The client sends source code or an uploaded file
+2. The request handler validates language support and file encoding
+3. The transpiler builds a prompt for Gemini
+4. The LLM generates target-language code
+5. The result is cleaned from markdown/extra text
+6. A validator checks the generated code
+7. If validation fails, the app asks the model to repair the output and retries
+8. The final code is saved to disk and recorded in the database
+9. The API returns the result and validation status
+
+## Cache and repair behavior
+
+The app includes:
+
+- in-memory transpile cache using a hash of source+language pair
+- database-backed transpilation history per user
+- a bounded repair loop in [app/services/transpiler.py](app/services/transpiler.py)
+
+This makes repeated conversions faster and gives the LLM a small feedback loop when compiler validation fails.
+
+## Notes
+
+- The project is currently a backend-only service. It does not include a frontend.
+- The system is designed around authenticated use, not anonymous public translation.
+- The current validation logic is strongest for Python and Go, while other languages are supported as generation targets but may not have equally rich validation coverage.
+
+## Repository structure
+
+```text
+codeshift-backend/
+├── app/
+│   ├── api/
+│   ├── aws_configs/
+│   ├── generated_code/
+│   ├── handlers/
+│   ├── helpers/
+│   ├── models/
+│   ├── services/
+│   ├── validators/
+│   ├── __init__.py
+│   ├── config.py
+│   ├── database.py
+│   ├── dependencies.py
+│   └── main.py
+├── alembic/
+├── logs/
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml
+├── requirements.txt
+├── README.md
+└── .env.example (if present in your environment)
+```
 

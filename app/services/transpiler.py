@@ -1,3 +1,4 @@
+# app/services/transpiler.py
 import asyncio
 from datetime import datetime
 import inspect
@@ -30,23 +31,37 @@ from app.helpers.constants import (
 
 MAX_REPAIR_ATTEMPTS = 2
 
+# Messages produced by ProcessRunner (or similar) when the tool itself failed,
+# not the code. Sending these to the LLM as "code errors" wastes calls.
+TOOLING_FAILURE_MARKERS = ("timed out after",)
+
 
 def extract_code(raw_text: str, target_language: str) -> str:
-    """Cleans backslashes and extracts code starting from the language's marker, if known."""
+    """Cleans backslashes and extracts code, dropping markdown fences and any text around them."""
     text = str(raw_text).strip()
 
     if "\\n" in text and "\n" not in text:
         text = text.replace("\\n", "\n").replace("\\t", "\t")
 
+    # 1. Strip a leading fence first (e.g. ```go\n), so the code survives the next steps.
+    text = re.sub(r"^```[\w+-]*[ \t]*\n", "", text)
+
+    # 2. Skip any preamble before the language's start marker, if known.
     marker = get_start_marker(target_language)
     if marker:
         match = re.search(marker, text, flags=re.MULTILINE)
         if match:
             text = text[match.start():]
 
-    text = re.sub(r"```.*$", "", text, flags=re.DOTALL).strip()
-    text = re.sub(r"^```\w*\n", "", text)
+    # 3. Anything left that starts a fence is the closing fence (and trailing chatter): cut it.
+    text = re.sub(r"\n?```.*$", "", text, flags=re.DOTALL).strip()
     return text
+
+
+def is_tooling_failure(message: str) -> bool:
+    """True if the validation message describes an infrastructure problem, not a code problem."""
+    lowered = message.lower()
+    return any(marker in lowered for marker in TOOLING_FAILURE_MARKERS)
 
 
 class CodeTranspilerService:
@@ -72,7 +87,9 @@ class CodeTranspilerService:
                 "(for example, exceptions to returned errors).\n"
                 "5. Include only the imports the code actually uses.\n"
                 "6. The code must compile: no unused imports and no unused local variables "
-                "(assign intentionally ignored values to `_` where the language allows it).",
+                "(assign intentionally ignored values to `_` where the language allows it).\n"
+                f"7. Use only the {target_language} standard library. Do not import third-party packages "
+                "unless the source code clearly depends on them.",
             ),
             ("user", "{code}"),
         ])
@@ -129,17 +146,22 @@ class CodeTranspilerService:
         if not generated_code:
             raise EmptyLLMResponseError(f"Model response did not contain any {target_language} code.")
 
-        is_valid, message = True, f"Validation skipped for {target_language}."
+        is_valid, message, repair_attempts = True, f"Validation skipped for {target_language}.", 0
         if should_validate:
             validator = get_validator(target_language)
             if validator:
-                is_valid, message, generated_code = await self._validate_with_repair(
+                is_valid, message, generated_code, repair_attempts = await self._validate_with_repair(
                     validator, generated_code, target_language
                 )
                 if not is_valid:
                     raise CodeValidationError(message, transpiled_code=generated_code)
             else:
                 message = f"No validator configured for {target_language}; skipped."
+
+        logger.info(
+            f"{source_language} -> {target_language} finished "
+            f"(validated={should_validate}, repair_attempts={repair_attempts})"
+        )
 
         try:
             extension = get_extension(target_language)
@@ -149,9 +171,11 @@ class CodeTranspilerService:
             raise FileWriteError(f"Could not write generated file: {str(e)}") from e
 
         result = {
-            "success": is_valid,
+            # Failed validation raises CodeValidationError above, so reaching here means success.
+            "success": True,
             "transpiled_code": generated_code,
             "validation_message": message,
+            "repair_attempts": repair_attempts,
             "saved_path": saved_path,
             "cached": False,
         }
@@ -196,7 +220,14 @@ class CodeTranspilerService:
                 f"{target_language} validation crashed unexpectedly: {str(e)}"
             ) from e
 
-        return self._normalize_validation(outcome, code)
+        is_valid, message, validated_code = self._normalize_validation(outcome, code)
+
+        # A timeout is a tooling problem: the model can't fix it, so don't spend repair calls on it.
+        if not is_valid and is_tooling_failure(message):
+            logger.error(f"Validation tooling failure for {target_language}: {message}")
+            raise ValidationToolUnavailableError(message)
+
+        return is_valid, message, validated_code
 
     async def _repair_code(self, code: str, error: str, target_language: str) -> str:
         prompt = ChatPromptTemplate.from_messages([
@@ -206,7 +237,8 @@ class CodeTranspilerService:
                 "RULES:\n"
                 "1. Return the COMPLETE corrected file.\n"
                 "2. Fix only what the error reports; do not change behavior.\n"
-                "3. Output ONLY code, with no markdown code blocks and no explanations.",
+                "3. Use only the {target_language} standard library; do not add third-party imports.\n"
+                "4. Output ONLY code, with no markdown code blocks and no explanations.",
             ),
             ("user", "Validation error:\n{error}\n\nCode:\n{code}"),
         ])
@@ -221,7 +253,12 @@ class CodeTranspilerService:
         return extract_code(text.strip(), target_language) if text else ""
 
     async def _validate_with_repair(self, validator, code: str, target_language: str):
+        """
+        Validate, and if it fails, ask the model to repair using the validator's error.
+        Returns (is_valid, message, code, repair_attempts).
+        """
         is_valid, message, code = await self._run_validator(validator, code, target_language)
+        repairs = 0
 
         for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
             if is_valid:
@@ -233,6 +270,10 @@ class CodeTranspilerService:
             repaired = await self._repair_code(code, message, target_language)
             if not repaired:
                 break
+            if repaired.strip() == code.strip():
+                logger.warning(f"{target_language} repair returned unchanged code; stopping.")
+                break
+            repairs = attempt
             is_valid, message, code = await self._run_validator(validator, repaired, target_language)
 
-        return is_valid, message, code
+        return is_valid, message, code, repairs
