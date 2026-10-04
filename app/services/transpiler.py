@@ -14,6 +14,9 @@ from app.helpers.exceptions import (
     ValidationToolUnavailableError,
 )
 from app.config import config
+from app.eval.cases import EVAL_CASES
+from app.eval.metrics import summarize
+from app.eval.runner import EvalRunner
 from app.services.file_writer import save_generated_code
 from app.helpers.utils import (
     get_extension,
@@ -184,6 +187,15 @@ class CodeTranspilerService:
             transpile_cache.set(cache_key, result)
 
         return result
+
+    async def evaluate_cases(self, prompt_version: str = "v1", cases=None):
+        """Run the curated evaluation suite against the current transpiler and return a summary."""
+        tasks = cases or EVAL_CASES
+        runner = EvalRunner(self, prompt_version)
+        results = []
+        for case in tasks:
+            results.append(await runner.run_case(case))
+        return summarize(results)
 
     def extract_text_from_response(self, response) -> str:
         content = getattr(response, "content", response)

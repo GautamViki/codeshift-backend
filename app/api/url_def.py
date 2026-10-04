@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.handlers import auth_handler, history_handlers
+from app.handlers import auth_handler, eval_handler, history_handlers
 from app.handlers import transpile_handlers as h
 
 router = APIRouter(prefix="/api/v1")
@@ -70,5 +70,17 @@ router.add_api_route(
     responses={
         401: {"description": "Invalid or missing bearer token"},
         422: {"description": "Validation error"},
+    },
+)
+
+# Evaluation routes
+router.add_api_route(
+    "/eval",
+    eval_handler.run_eval,
+    methods=["POST"],
+    tags=["eval"],
+    summary="Run the prompt evaluation benchmark suite",
+    responses={
+        401: {"description": "Invalid or missing bearer token"},
     },
 )
