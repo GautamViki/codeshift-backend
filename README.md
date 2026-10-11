@@ -1,279 +1,248 @@
 # CodeShift Backend
 
-This project is a FastAPI backend for AI-assisted code transpilation. It allows authenticated users to submit source code or uploaded files, translate them into a target language with Gemini, validate the output, store results, and keep a history of past transpilation requests.
+CodeShift Backend is a FastAPI service for AI-assisted code transpilation. Authenticated users can submit source code or upload a source file, choose a target language, and receive generated code. The service uses Google Gemini through LangChain, can validate generated Python and Go code, stores user and transpilation history in PostgreSQL, and caches repeated conversions.
 
-## What the project does
+The web client is maintained separately in the `codeshift-web` project.
 
-- Registers and authenticates users with email/password and JWT tokens
-- Accepts raw code or uploaded source files
-- Detects the source language from the file extension or request parameters
-- Uses LangChain + Google Gemini to generate target-language code
-- Cleans the LLM output and strips markdown fences or surrounding text
-- Validates generated code using language-specific validators
-- Retries a small repair loop when validation fails
-- Saves generated code to disk and stores metadata in PostgreSQL/SQLAlchemy models
-- Reuses cached transpilation results for repeated inputs
+## Features
 
-## Current architecture
+- Email/password registration and login with bearer JWT authentication.
+- Raw text and file-upload transpilation endpoints.
+- Source-language detection for uploaded files and explicit language selection for raw code.
+- Gemini-backed code generation with output cleanup.
+- Optional syntax validation, including a bounded repair loop when validation fails.
+- PostgreSQL persistence for users and per-user transpilation history.
+- In-memory caching for repeated source/language combinations.
+- An authenticated evaluation endpoint for the prompt benchmark suite.
 
-### App entry points
+## Architecture
 
-- [app/main.py](app/main.py): creates the FastAPI app, CORS config, exception handlers, and includes the API router
-- [app/api/url_def.py](app/api/url_def.py): declares all routes
-
-### Core layers
-
-- [app/handlers](app/handlers): handles HTTP requests for auth, transpilation, and history
-- [app/services](app/services): contains the business logic for auth, transpilation, and history
-- [app/models](app/models): ORM models for users and transpilation records
-- [app/validators](app/validators): validation rules for generated code
-- [app/helpers](app/helpers): constants, logging, cache, exceptions, utilities
-- [app/database.py](app/database.py): SQLAlchemy async database setup
-- [app/dependencies.py](app/dependencies.py): auth dependency for protected routes
+| Path | Responsibility |
+| --- | --- |
+| `app/main.py` | FastAPI app, CORS, middleware, exception handling, and router setup |
+| `app/api/url_def.py` | API route declarations |
+| `app/handlers/` | HTTP request handling for auth, transpilation, history, and evaluation |
+| `app/services/` | Authentication, transpilation, history, and output-file services |
+| `app/models/` | SQLAlchemy models |
+| `app/validators/` | Generated-code validators |
+| `app/helpers/` | Configuration helpers, logging, cache, exceptions, and utilities |
+| `app/alembic/` | Database migration configuration and revisions |
 
 ## Supported languages
 
-The code currently defines these languages in [app/helpers/constants.py](app/helpers/constants.py):
+The backend accepts Python, Go, JavaScript, TypeScript, Java, and Rust as source or target languages. Syntax validation is currently implemented for Python and Go; other languages may be generated without equivalent validator coverage.
 
-- Python
-- Go
-- JavaScript
-- TypeScript
-- Java
-- Rust
+## Requirements
 
-Validation is currently implemented for:
+- Python 3.14 or newer.
+- PostgreSQL 16 (or a compatible PostgreSQL version).
+- A Google Gemini API key. If `GOOGLE_API_KEY` is not set, the app attempts to read the `transpiler_ai_key` parameter from AWS Systems Manager Parameter Store in `us-east-1`.
+- Go installed and on `PATH` if you want to run Go validation locally. The Docker image installs Go.
 
-- Python
-- Go
+## Configuration
 
-## Security and data flow
-
-The app uses:
-
-- JWT-based authentication via `OAuth2PasswordBearer`
-- bcrypt password hashing in [app/services/auth.py](app/services/auth.py)
-- Async SQLAlchemy sessions for the database layer
-- a hash-based cache key for repeated transpilation requests
-
-## Prerequisites
-
-Before running the backend, you need:
-
-- Python 3.14+ (from [pyproject.toml](pyproject.toml))
-- PostgreSQL running and available via `DB_URL`
-- Go installed and available in `PATH` for Go validation checks
-- A Google Gemini API key
-
-## Environment variables
-
-Create a `.env` or `.env.development` file with values like:
+Create `.env.development` in the backend project directory. For a PostgreSQL server reachable at `your-postgres.example.com` on port 5432:
 
 ```env
 ENVIRONMENT=development
-DB_URL=postgresql+asyncpg://user:password@localhost:5432/codeshift
+DATABASE_URL=postgresql+asyncpg://<user>:<password>@your-postgres.example.com:5432/<database>
 GOOGLE_API_KEY=your_gemini_api_key
-JWT_SECRET_KEY=change_this_in_production
+JWT_SECRET_KEY=replace-with-a-long-random-secret
 ```
 
-The app loads environment files automatically from [app/config.py](app/config.py). If `ENVIRONMENT=development`, it tries to load `.env.development` first, then falls back to `.env`.
+`DATABASE_URL` is required. `GOOGLE_API_KEY` can be omitted when AWS credentials are configured to read the SSM parameter described above. Set a strong, private `JWT_SECRET_KEY` outside local development; the built-in development fallback must not be used in production.
 
-## Local setup
+The app loads `.env.<ENVIRONMENT>` (for example, `.env.development`) and falls back to `.env` if that file does not exist. The JWT secret is read from the process environment. Do not commit environment files or secrets.
 
-### 1. Install dependencies
+## Run locally
+
+From the backend project directory:
 
 ```bash
-python -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Start the app
+Start PostgreSQL and ensure the database named in `DATABASE_URL` exists. Apply the database migrations:
 
 ```bash
-ENVIRONMENT=development uv run uvicorn app.main:app --reload --reload-exclude 'app/generated_code/**' --host 0.0.0.0 --port 8080
+alembic -c app/alembic.ini upgrade head
 ```
 
-### 3. Open API docs
+Start the API on port 8080 (the default API port configured in the web frontend):
 
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+```bash
+ENVIRONMENT=development uvicorn app.main:app --reload --reload-exclude 'app/generated_code/**' --host 0.0.0.0 --port 8080
+```
+
+Replace `your-backend.example.com` with the hostname where the API is reachable. The API root is `http://your-backend.example.com:8080/`. Interactive API documentation is available at:
+
+- Swagger UI: `http://your-backend.example.com:8080/docs`
+- ReDoc: `http://your-backend.example.com:8080/redoc`
+
+## Run with Docker Compose
+
+The Compose setup runs the API on host port 8000 and PostgreSQL on host port 5432. It expects a `.env.development` file because that file is passed to the API container. For database connections from the API container, use the Compose service hostname `postgres-db`:
+
+```env
+ENVIRONMENT=development
+DATABASE_URL=postgresql+asyncpg://codeshift:localdevpassword@postgres-db:5432/codeshift
+GOOGLE_API_KEY=your_gemini_api_key
+JWT_SECRET_KEY=replace-with-a-long-random-secret
+```
+
+The Compose file uses `localdevpassword` as its local PostgreSQL password; use matching credentials in `DATABASE_URL`. Do not reuse this local configuration in production.
+
+Start the database and apply migrations from the API image:
+
+```bash
+docker compose up -d postgres-db
+docker compose run --rm transpiler-api alembic -c app/alembic.ini upgrade head
+docker compose up --build
+```
+
+With Compose, replace `your-backend.example.com` with the hostname where the Docker host is reachable. The API is available at `http://your-backend.example.com:8000/`, with docs at `http://your-backend.example.com:8000/docs` and `http://your-backend.example.com:8000/redoc`.
 
 ## API endpoints
 
-### Health check
+All application routes use the `/api/v1` prefix, except for the health endpoint at `/`.
+The examples below use `https://your-backend.example.com` as a placeholder base URL; replace it with your deployed API URL.
+
+| Method and path | Authentication | Description |
+| --- | --- | --- |
+| `GET /` | No | Health check |
+| `POST /api/v1/auth/register` | No | Register with email and password form fields |
+| `POST /api/v1/auth/login` | No | Log in with email and password form fields; returns a bearer token |
+| `POST /api/v1/transpile-raw` | Bearer token | Transpile a plain-text request body |
+| `POST /api/v1/transpile-file` | Bearer token | Transpile an uploaded source file |
+| `GET /api/v1/history` | Bearer token | List the authenticated user's recent transpilation history |
+| `POST /api/v1/eval` | Bearer token | Run the prompt evaluation suite; accepts optional `prompt_version` (default `v1`) |
+
+### Register
 
 ```bash
-curl http://localhost:8000/
+curl -X POST https://your-backend.example.com/api/v1/auth/register \
+  -F 'email=user@example.com' \
+  -F 'password=choose-a-password'
 ```
 
-Response:
-
-```json
-{
-  "status": "running",
-  "service": "Polyglot Refactor Engine"
-}
-```
-
-### Register a user
-
-`POST /api/v1/auth/register`
-
-Uses form data:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/auth/register \
-  -F "email=user@example.com" \
-  -F "password=secret123"
-```
-
-Example response:
-
-```json
-{
-  "id": 1,
-  "email": "user@example.com"
-}
-```
+Registration requires a valid email and a password of at least 6 characters (maximum 72 UTF-8 bytes).
 
 ### Login
 
-`POST /api/v1/auth/login`
+```bash
+curl -X POST https://your-backend.example.com/api/v1/auth/login \
+  -F 'email=user@example.com' \
+  -F 'password=choose-a-password'
+```
+
+The response includes an `access_token` and `token_type: "bearer"`. Access tokens expire after 30 minutes.
+
+### Transpile raw code
+
+Provide the source code as a plain-text body. Language and behavior options are query parameters:
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/auth/login \
-  -F "email=user@example.com" \
-  -F "password=secret123"
-```
-
-Example response:
-
-```json
-{
-  "access_token": "<jwt-token>",
-  "token_type": "bearer"
-}
-```
-
-### Transpile a file
-
-`POST /api/v1/transpile-file`
-
-Requires Bearer token auth. Upload a file and pass the target language.
-
-```bash
-curl -X POST http://localhost:8000/api/v1/transpile-file \
-  -H "Authorization: Bearer <token>" \
-  -F "file=@example.py" \
-  -F "target_language=go" \
-  -F "validate_syntax=true" \
-  -F "use_cache=true"
-```
-
-Example response:
-
-```json
-{
-  "success": true,
-  "transpilation_id": 12,
-  "filename": "example.go",
-  "saved_path": "generated_code/example.go",
-  "validation_message": "Code passed Go compiler syntax checks.",
-  "cached": false
-}
-```
-
-### Transpile raw source text
-
-`POST /api/v1/transpile-raw`
-
-Requires Bearer token auth. The request body is plain text, and language parameters are passed as query params.
-
-```bash
-curl -X POST "http://localhost:8000/api/v1/transpile-raw?source_language=python&target_language=go&validate_syntax=true&use_cache=true" \
-  -H "Authorization: Bearer <token>" \
+curl -X POST \
+  'https://your-backend.example.com/api/v1/transpile-raw?source_language=python&target_language=go&validate_syntax=true&use_cache=true' \
+  -H 'Authorization: Bearer YOUR_ACCESS_TOKEN' \
+  -H 'Content-Type: text/plain' \
   --data-binary $'def add(a, b):\n    return a + b\n'
 ```
 
-Response is plain text containing the transpiled output.
+The response body is plain text containing the generated code. The request body must be valid UTF-8 and no larger than 1 MB.
 
-### Fetch transpilation history
+### Transpile a file
 
-`GET /api/v1/history`
+The source language is detected from the uploaded file extension:
 
 ```bash
-curl "http://localhost:8000/api/v1/history?limit=20&offset=0" \
-  -H "Authorization: Bearer <token>"
+curl -X POST https://your-backend.example.com/api/v1/transpile-file \
+  -H 'Authorization: Bearer YOUR_ACCESS_TOKEN' \
+  -F 'file=@example.py' \
+  -F 'target_language=go' \
+  -F 'validate_syntax=true' \
+  -F 'use_cache=true'
 ```
 
-Example response:
+The endpoint returns JSON with the success status, transpilation ID, generated filename and path, validation message, and cache status. Uploaded files must be UTF-8 text and use a supported language extension.
 
-```json
-[
-  {
-    "id": 12,
-    "source_language": "python",
-    "target_language": "go",
-    "created_at": "2026-10-04T10:20:00Z"
-  }
-]
+### Fetch history
+
+History is scoped to the authenticated user. `limit` defaults to 20 (maximum 100) and `offset` defaults to 0:
+
+```bash
+curl 'https://your-backend.example.com/api/v1/history?limit=20&offset=0' \
+  -H 'Authorization: Bearer YOUR_ACCESS_TOKEN'
 ```
+
+### Run evaluation
+
+```bash
+curl -X POST 'https://your-backend.example.com/api/v1/eval?prompt_version=v1' \
+  -H 'Authorization: Bearer YOUR_ACCESS_TOKEN'
+```
+
+The response summarizes benchmark totals, pass rate, and failures.
 
 ## Transpilation flow
 
-A single transpile request follows this flow:
+1. An authenticated request supplies raw code or a source file.
+2. The handler validates the language, encoding, and request size where applicable.
+3. The transpilation service sends a language-specific prompt to Gemini.
+4. The generated response is cleaned to extract code.
+5. If validation is enabled and a validator exists, the output is checked and may be repaired with a bounded retry loop.
+6. Generated code is saved under `app/generated_code/`, and request metadata is recorded in PostgreSQL history.
+7. The API returns the result.
 
-1. The client sends source code or an uploaded file
-2. The request handler validates language support and file encoding
-3. The transpiler builds a prompt for Gemini
-4. The LLM generates target-language code
-5. The result is cleaned from markdown/extra text
-6. A validator checks the generated code
-7. If validation fails, the app asks the model to repair the output and retries
-8. The final code is saved to disk and recorded in the database
-9. The API returns the result and validation status
+## Database migrations
 
-## Cache and repair behavior
+Database schema changes are managed with Alembic. The migration environment reads `DATABASE_URL` and converts the async PostgreSQL URL to a synchronous driver URL for migration execution. Run migrations after creating the database and before using database-backed endpoints:
 
-The app includes:
+```bash
+alembic -c app/alembic.ini upgrade head
+```
 
-- in-memory transpile cache using a hash of source+language pair
-- database-backed transpilation history per user
-- a bounded repair loop in [app/services/transpiler.py](app/services/transpiler.py)
+## Tests and linting
 
-This makes repeated conversions faster and gives the LLM a small feedback loop when compiler validation fails.
+The test and lint commands require `pytest` and `ruff` to be installed; they are development tools and are not included in `requirements.txt`. Install them in the active environment if needed:
 
-## Notes
+```bash
+pip install pytest ruff
+```
 
-- The project is currently a backend-only service. It does not include a frontend.
-- The system is designed around authenticated use, not anonymous public translation.
-- The current validation logic is strongest for Python and Go, while other languages are supported as generation targets but may not have equally rich validation coverage.
+Run the backend tests from the project root:
+
+```bash
+pytest app/tests
+```
+
+Run Ruff:
+
+```bash
+ruff check app
+```
 
 ## Repository structure
 
 ```text
 codeshift-backend/
 ├── app/
-│   ├── api/
-│   ├── aws_configs/
-│   ├── generated_code/
-│   ├── handlers/
-│   ├── helpers/
-│   ├── models/
-│   ├── services/
-│   ├── validators/
-│   ├── __init__.py
-│   ├── config.py
-│   ├── database.py
-│   ├── dependencies.py
-│   └── main.py
-├── alembic/
-├── logs/
+│   ├── alembic/       # Alembic configuration and migration revisions
+│   ├── api/           # Route declarations
+│   ├── aws_configs/   # AWS Systems Manager secret lookup
+│   ├── eval/          # Prompt evaluation cases, metrics, and runner
+│   ├── generated_code/# Generated transpilation output
+│   ├── handlers/      # HTTP handlers
+│   ├── helpers/       # Constants, cache, exceptions, logging, utilities
+│   ├── models/        # SQLAlchemy models
+│   ├── services/      # Business logic
+│   ├── tests/         # Backend tests
+│   └── validators/    # Generated-code validators
 ├── Dockerfile
 ├── docker-compose.yml
 ├── pyproject.toml
 ├── requirements.txt
-├── README.md
-└── .env.example (if present in your environment)
+└── README.md
 ```
